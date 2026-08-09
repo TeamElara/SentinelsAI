@@ -1,7 +1,6 @@
 # Sentinels v4 — Attack Surface: API, Subdomains, Misconfiguration
 
-> **Status:** written 2026-08-09, on branch `v4-attack-surface-agents`. Nothing
-> implemented yet — this document is the plan only.
+> **Status:** written 2026-08-09, on branch `v4-attack-surface-agents`.
 >
 > Same discipline as [`PLAN-v2.md`](PLAN-v2.md) and [`PLAN-v3.md`](PLAN-v3.md):
 > small, independently verifiable milestones; **do not start N+1 until N passes
