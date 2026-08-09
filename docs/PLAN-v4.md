@@ -8,7 +8,10 @@
 > its verification**; one short learning note per milestone
 > (`docs/learning/`), per [`CLAUDE.md`](../CLAUDE.md).
 >
-> **Resume here:** V1.
+> V1 done, 2026-08-09. Slugs confirmed as planned; crt.sh confirmed in. Note:
+> [`learning/47-affected-url-and-confidence.md`](learning/47-affected-url-and-confidence.md).
+>
+> **Resume here:** V2.
 
 ---
 
@@ -127,6 +130,12 @@ and the plan says explicitly, per agent, what it defers.
 ## PHASE V-A — Foundation *(no new checks yet, no visible UI change)*
 
 ### V1 — Finding schema: `affected_url` + `confidence`
+
+> **Status:** done, 2026-08-09. Migration v8 applied in place to the existing
+> database; all three pre-v4 stored scans re-read at identical scores with both
+> new fields NULL; a live `POST /scan` of `example.com` scored 54/F exactly as
+> the stored pre-change scan of the same site did. Note:
+> [`learning/47-affected-url-and-confidence.md`](learning/47-affected-url-and-confidence.md).
 
 **Files:** `~backend/models.py`, `~backend/db.py`, `~backend/storage/findings.py`,
 `~backend/storage/scans.py`, `~frontend/lib/api.ts`, `~frontend/components/FindingRow.tsx`

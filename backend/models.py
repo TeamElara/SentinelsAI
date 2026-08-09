@@ -86,6 +86,18 @@ class Finding(BaseModel):
     file_path: Optional[str] = None      # repo-relative path; None for URL-scan findings
     line: Optional[int] = None           # 1-based line number; None for URL-scan findings
 
+    # The exact URL or host this finding is about, when that isn't just "the
+    # scanned site". A subdomain finding is meaningless without it ("HSTS
+    # missing" — on *what*?), and it's half of the key that stops two agents
+    # seeing one problem from costing points twice (see scoring.py).
+    affected_url: Optional[str] = None
+
+    # 0.0-1.0. None means "not applicable" — the check either saw the thing or
+    # it didn't, so there's nothing to hedge. Set only where the evidence
+    # genuinely leaves room for doubt (a dangling DNS record that *might* be a
+    # takeover), so a guess can never be presented as a fact.
+    confidence: Optional[float] = None
+
 
 class AgentResult(BaseModel):
     """Everything one agent returns, plus timing for the live progress UI."""

@@ -22,6 +22,10 @@ export function FindingRow({
   const isCritical = finding.severity === "Critical";
   // Only show the fix button when we have a scanId (legacy Report.tsx passes none).
   const showFix = !!scanId && (finding.status === "fail" || finding.status === "warn");
+  // A finding only carries confidence when its evidence genuinely leaves room
+  // for doubt (backend/models.py). Below 0.9 it gets said out loud, so a
+  // "potential" finding can never be read as a confirmed one.
+  const needsVerification = finding.confidence !== null && finding.confidence < 0.9;
 
   return (
     <li
@@ -42,9 +46,23 @@ export function FindingRow({
         <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
           {finding.status}
         </span>
+        {needsVerification && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+            needs verification · {Math.round(finding.confidence! * 100)}%
+          </span>
+        )}
       </div>
 
       <h4 className="mt-2 text-lg leading-snug sm:text-xl">{finding.title}</h4>
+
+      {/* Which host this is actually about. Only rendered when the backend set
+          it, so every finding from the original five agents — all of which are
+          about the scanned site itself — looks exactly as it did before. */}
+      {finding.affected_url && (
+        <p className="mt-1.5 break-all font-mono text-xs text-muted">
+          {finding.affected_url}
+        </p>
+      )}
 
       {/* Every field below is optional in backend/models.py — it defaults to ""
           — so each is rendered only when there's something to render. */}

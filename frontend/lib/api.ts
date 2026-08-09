@@ -51,6 +51,8 @@ export interface Finding {
   evidence_items: EvidenceItem[];         // structured evidence (may be empty)
   file_path: string | null;               // repo-relative path; null for URL-scan findings
   line: number | null;                    // 1-based line number; null for URL-scan findings
+  affected_url: string | null;            // the exact URL/host this is about; null = the scanned site itself
+  confidence: number | null;              // 0-1; null = nothing to hedge, the check is certain
 }
 
 export interface AgentResult {

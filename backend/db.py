@@ -133,6 +133,15 @@ CREATE TABLE repo_files (
 CREATE INDEX idx_repo_files_scan ON repo_files(scan_id);
 """
 
+# PLAN-v4 V1: two additive columns for the three new URL-scan agents.
+# Both are nullable with no default, so every finding written before this
+# migration reads back as NULL -- which is exactly what it always meant:
+# "this finding is about the scanned site itself" and "nothing to hedge".
+_V8_SCHEMA = """
+ALTER TABLE findings ADD COLUMN affected_url TEXT;
+ALTER TABLE findings ADD COLUMN confidence REAL;
+"""
+
 # Each entry is (version, schema sql to apply to go from version-1 to version).
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_SCHEMA),
@@ -142,6 +151,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (5, _V5_SCHEMA),
     (6, _V6_SCHEMA),
     (7, _V7_SCHEMA),
+    (8, _V8_SCHEMA),
 ]
 
 

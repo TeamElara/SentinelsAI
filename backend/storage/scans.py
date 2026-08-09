@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from db import get_connection
 from models import AgentResult, ChecklistItem, Finding, RepoFileEntry, ScanReport, ScanSummary, Severity, Status
+from scoring import count_by_severity
 from storage.findings import load_evidence, save_agent_results
 from storage.repo_files import save_repo_files
 
@@ -137,6 +138,8 @@ def get_scan(scan_id: str) -> ScanReport | None:
                 evidence_items=evidence_by_finding_id.get(row["id"], []),
                 file_path=row["file_path"],
                 line=row["line"],
+                affected_url=row["affected_url"],
+                confidence=row["confidence"],
             )
             all_findings.append(f)
             findings_by_agent.setdefault(row["agent"], []).append(f)
@@ -151,9 +154,13 @@ def get_scan(scan_id: str) -> ScanReport | None:
             for ar in agent_rows
         ]
 
-        counts: dict[str, int] = {}
-        for f in all_findings:
-            counts[f.severity.value] = counts.get(f.severity.value, 0) + 1
+        # The same function a live scan uses (orchestrator._finalize), rather
+        # than a second tally written by hand here. The hand-written one
+        # counted PASS findings too, so a stored scan's severity counts came
+        # back higher than the ones shown the moment the scan finished -- a
+        # small discrepancy while agents emit ~13 findings, a glaring one once
+        # they emit inventory findings by the dozen.
+        counts = count_by_severity(all_findings)
 
         checklist = load_checklist(conn, scan_id)
 

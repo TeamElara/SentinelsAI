@@ -30,9 +30,9 @@ def save_agent_results(
                 INSERT INTO findings (
                     scan_id, finding_key, agent, title, category,
                     severity, status, owasp, evidence, description, remediation,
-                    file_path, line
+                    file_path, line, affected_url, confidence
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     scan_id,
@@ -48,6 +48,8 @@ def save_agent_results(
                     finding.remediation,
                     finding.file_path,
                     finding.line,
+                    finding.affected_url,
+                    finding.confidence,
                 ),
             )
             finding_id = cursor.lastrowid
