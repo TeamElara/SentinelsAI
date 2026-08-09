@@ -156,7 +156,7 @@ export function ScanDialog({
                 Scan a website
               </h2>
               <p className="mt-3 max-w-sm text-sm leading-relaxed text-muted">
-                Paste the address you want inspected. Five agents read what is
+                Paste the address you want inspected. Eight agents read what is
                 already public and return a graded report.
               </p>
             </ScanLauncher>

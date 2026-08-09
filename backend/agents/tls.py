@@ -26,9 +26,13 @@ _EXPIRY_WARNING_DAYS = 30
 _DEPRECATED_PROTOCOLS = {"SSLv2", "SSLv3", "TLSv1", "TLSv1.1"}
 
 
-def _fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, str]:
+def fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, str]:
     """Blocking: open a TCP socket, do a real verified TLS handshake, and
     return (certificate dict, negotiated protocol version).
+
+    Public (not `_`-prefixed) because `agents/subdomain.py` (PLAN-v4 §V6)
+    reuses this exact helper for certificate SANs and per-subdomain TLS
+    checks — one handshake implementation, not two.
 
     `ssl.create_default_context()` verifies the certificate chain against the
     system's trusted CAs and checks the hostname — exactly what a browser
@@ -87,7 +91,7 @@ class TLSAgent(BaseAgent):
 
         try:
             cert, protocol_version = await asyncio.to_thread(
-                _fetch_certificate, hostname, port, 10.0
+                fetch_certificate, hostname, port, 10.0
             )
         except ssl.SSLError as exc:
             # Covers an expired cert, an untrusted/self-signed chain, and a

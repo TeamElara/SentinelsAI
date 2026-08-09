@@ -142,6 +142,27 @@ ALTER TABLE findings ADD COLUMN affected_url TEXT;
 ALTER TABLE findings ADD COLUMN confidence REAL;
 """
 
+# PLAN-v4 V6: the subdomain agent's structured inventory (models.SubdomainEntry),
+# separate from `findings` because it's not a pass/fail check -- it's a list
+# of hosts, most of which have no issue at all.
+_V9_SCHEMA = """
+CREATE TABLE subdomains (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id      TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    host         TEXT NOT NULL,
+    record_type  TEXT NOT NULL,
+    record_value TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    http_status  INTEGER,
+    scheme       TEXT,
+    tls_valid    INTEGER,        -- 0/1/NULL, sqlite has no real boolean
+    server       TEXT,
+    redirects_to TEXT,
+    issue_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_subdomains_scan ON subdomains(scan_id);
+"""
+
 # Each entry is (version, schema sql to apply to go from version-1 to version).
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_SCHEMA),
@@ -152,6 +173,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (6, _V6_SCHEMA),
     (7, _V7_SCHEMA),
     (8, _V8_SCHEMA),
+    (9, _V9_SCHEMA),
 ]
 
 

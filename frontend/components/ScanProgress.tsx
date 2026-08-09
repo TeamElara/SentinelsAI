@@ -7,7 +7,7 @@ import type { AgentResult, TargetType } from "@/lib/api";
 // Used only when the agent-list fetch fails — keeps the waiting state
 // working even if the backend is momentarily unreachable at scan start.
 const FALLBACK_NAMES: Record<TargetType, string[]> = {
-  url: ["headers", "recon", "tls", "exposure", "dns"],
+  url: ["headers", "recon", "tls", "exposure", "dns", "api-security", "misconfig", "subdomain"],
   repo: ["repo-hygiene", "repo-secrets", "repo-dependencies", "repo-config", "repo-patterns"],
 };
 
@@ -41,7 +41,7 @@ export function ScanProgress({
   }, [targetType]);
 
   return (
-    <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-5">
+    <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
       {agentNames.map((name) => {
         const result = agentResults[name];
 

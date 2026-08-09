@@ -9,6 +9,7 @@ from models import AgentResult, ChecklistItem, Finding, RepoFileEntry, ScanRepor
 from scoring import count_by_severity
 from storage.findings import load_evidence, save_agent_results
 from storage.repo_files import save_repo_files
+from storage.subdomains import load_subdomains, save_subdomains
 
 
 def save_checklist(conn: sqlite3.Connection, scan_id: str, items: list[ChecklistItem]) -> None:
@@ -163,6 +164,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
         counts = count_by_severity(all_findings)
 
         checklist = load_checklist(conn, scan_id)
+        subdomains = load_subdomains(conn, scan_id)
 
         return ScanReport(
             id=scan_row["id"],
@@ -179,6 +181,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
             readiness_score=scan_row["readiness_score"],
             deployment_status=scan_row["deployment_status"],
             checklist=checklist,
+            subdomains=subdomains,
         )
     finally:
         conn.close()
@@ -230,6 +233,8 @@ def save_scan(report: ScanReport, repo_files: list[RepoFileEntry] | None = None)
         save_checklist(conn, report.id, report.checklist)
         if repo_files:
             save_repo_files(conn, report.id, repo_files)
+        if report.subdomains:
+            save_subdomains(conn, report.id, report.subdomains)
         conn.commit()
     finally:
         conn.close()

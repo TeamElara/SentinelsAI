@@ -11,11 +11,22 @@ from __future__ import annotations
 
 from models import Finding, ScanReport, ChecklistItem
 
-# v2 (R10): repo-flavoured analyst + fix prompts added. Bumping this
-# invalidates every cached fix suggestion with no DB migration -- the old
-# rows just stop being returned, since the cache lookup matches on
-# (finding_id, prompt_version) (see ai/fixes.py). Nothing needs cleaning up.
-PROMPT_VERSION = "v2"
+# v3 (PLAN-v4 §V7): analyst prompt now splits findings into confirmed vs.
+# needs-verification (by confidence) and carries affected_url per line; chat
+# digest gained the subdomain inventory. Bumping this invalidates every
+# cached fix suggestion with no DB migration -- the old rows just stop being
+# returned, since the cache lookup matches on (finding_id, prompt_version)
+# (see ai/fixes.py). Nothing needs cleaning up.
+PROMPT_VERSION = "v3"
+
+# A finding's confidence is None ("not applicable" -- the check either saw
+# the thing or it didn't) or a 0.0-1.0 hedge, only ever set by the v4 agents
+# (see models.Finding). Below this, the finding is a *lead*, not a fact --
+# it needs a human to confirm it before anyone acts on it. 0.9 matches the
+# threshold FindingRow.tsx already uses for its "needs verification" chip,
+# so the report UI and the AI summary never disagree about which findings
+# are hedged.
+_NEEDS_VERIFICATION_THRESHOLD = 0.9
 
 # ── Analyst (executive summary) ────────────────────────────────────────────
 
@@ -24,7 +35,15 @@ ANALYST_SYSTEM = (
     "automated website security scan, for a reader who is not a security expert. "
     "Write 2-4 sentences, no markdown formatting, no bullet points. "
     "Mention the most serious problem by name if one exists, and say clearly "
-    "whether the site is in generally good or poor shape."
+    "whether the site is in generally good or poor shape. "
+    "Findings are given in two groups, CONFIRMED and NEEDS VERIFICATION -- "
+    "the second group is not certain, so say so plainly whenever you mention "
+    "one of those (e.g. 'a possible... that should be manually confirmed'). "
+    "Never invent a finding that isn't listed. Never restate or change the "
+    "score, grade, or any finding's severity -- those are computed, not "
+    "yours to interpret. Prioritise what you mention by severity first, then "
+    "confidence. Explain impact in terms of what could actually go wrong, "
+    "not jargon."
 )
 
 # The repo-side analyst has a narrower, more specific job than the URL one:
@@ -45,14 +64,44 @@ REPO_ANALYST_SYSTEM = (
 _MAX_FINDINGS_IN_ANALYST_PROMPT = 15
 
 
+def _finding_line(finding: Finding) -> str:
+    line = f"- [{finding.status.value.upper()}] {finding.severity.value}: {finding.title}"
+    if finding.affected_url:
+        line += f" (on {finding.affected_url})"
+    return line
+
+
 def build_analyst_messages(
     url: str, score: int, grade: str, findings: list[Finding]
 ) -> list[dict]:
-    lines = [f"Site: {url}", f"Score: {score}/100 (grade {grade})", "", "Findings:"]
-    for finding in findings[:_MAX_FINDINGS_IN_ANALYST_PROMPT]:
-        lines.append(
-            f"- [{finding.status.value.upper()}] {finding.severity.value}: {finding.title}"
-        )
+    # Split confirmed vs. needs-verification *before* truncating to the top
+    # N, so a scan with 15+ confirmed findings doesn't silently push every
+    # hedged one off the end of the prompt.
+    confirmed = [
+        f for f in findings
+        if f.confidence is None or f.confidence >= _NEEDS_VERIFICATION_THRESHOLD
+    ]
+    needs_verification = [
+        f for f in findings
+        if f.confidence is not None and f.confidence < _NEEDS_VERIFICATION_THRESHOLD
+    ]
+
+    lines = [f"Site: {url}", f"Score: {score}/100 (grade {grade})", ""]
+    lines.append("Confirmed findings:")
+    if confirmed:
+        for finding in confirmed[:_MAX_FINDINGS_IN_ANALYST_PROMPT]:
+            lines.append(_finding_line(finding))
+    else:
+        lines.append("- none")
+
+    lines.append("")
+    lines.append("Needs verification (lower confidence -- do not state as fact):")
+    if needs_verification:
+        for finding in needs_verification[:_MAX_FINDINGS_IN_ANALYST_PROMPT]:
+            lines.append(f"{_finding_line(finding)} (confidence {finding.confidence:.0%})")
+    else:
+        lines.append("- none")
+
     return [
         {"role": "system", "content": ANALYST_SYSTEM},
         {"role": "user", "content": "\n".join(lines)},
@@ -198,9 +247,24 @@ def build_chat_messages(
     digest_lines.append("Findings:")
     for f in report.findings[:_MAX_CHAT_FINDINGS]:
         line = f"  [{f.status.value.upper()}] {f.severity.value} — {f.title}"
+        if f.affected_url:
+            line += f" (on {f.affected_url})"
+        if f.confidence is not None:
+            line += f" | confidence {f.confidence:.0%}"
         if f.evidence:
             line += f" | Evidence: {f.evidence[:120]}"
         digest_lines.append(line)
+
+    if report.subdomains:
+        digest_lines.append("")
+        digest_lines.append("Discovered subdomains:")
+        for s in report.subdomains:
+            entry = f"  {s.host} ({s.record_type} {s.record_value}, via {s.source})"
+            if s.http_status is not None:
+                entry += f" — HTTP {s.http_status}"
+            if s.issue_count:
+                entry += f", {s.issue_count} issue(s)"
+            digest_lines.append(entry)
 
     if checklist:
         digest_lines.append("")

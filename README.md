@@ -24,7 +24,7 @@ alarm yourself.
 
 ## What a scan looks like
 
-Five agents run concurrently against the target and each contributes findings:
+Eight agents run concurrently against the target and each contributes findings:
 
 | Agent | Checks |
 |---|---|
@@ -33,13 +33,40 @@ Five agents run concurrently against the target and each contributes findings:
 | **TLS** | Certificate validity, expiry, and protocol version |
 | **Exposure** | Publicly-reachable `/.env` or `/.git/HEAD` (content-verified, not just status-code) |
 | **DNS** | SPF and DMARC — whether the domain can be spoofed in email |
+| **API Security** | Publicly reachable API docs/GraphQL, permissive CORS, response leaks, auth posture, risky methods |
+| **Misconfiguration** | Directory listings, forgotten backup files, debug output, server version disclosure, default/setup pages, unsafe caching |
+| **Subdomain Security** | What else the domain exposes — certificate SANs, Certificate Transparency logs, and a small common-name list, each DNS-verified — plus dangling DNS / potential takeover, honestly graded by confidence |
 
 The findings are combined into a deterministic 0–100 score and A–F grade — the
 same site scanned twice always produces the same result — then an AI layer
 (optional, degrades gracefully with no key configured) adds a plain-language
-summary on top.
+summary on top. When two agents see the same underlying problem (e.g. a
+subdomain missing the same header the apex is already flagged for), scoring
+deduplicates, decays repeats, and caps each new agent's total penalty — see
+[`docs/PLAN-v4.md`](docs/PLAN-v4.md) §V3 for the exact rules.
 
 ![Report screen](docs/images/report-screen.png)
+
+## What Sentinels does *not* do
+
+Every agent above stops short of the line that would turn a passive read into
+an attack, even where the extra step would find more:
+
+- **API Security** never sends a GraphQL introspection query — only reads
+  what an anonymous `GET` already reveals — and never invokes a method it
+  discovers via `OPTIONS` (PUT/DELETE/PATCH/TRACE are read from the `Allow`
+  header, never called).
+- **Misconfiguration** never invokes a risky HTTP method either, and never
+  deliberately triggers an error to see a stack trace — debug output is only
+  ever found in responses already fetched for other reasons.
+- **Subdomain Security** never attempts to *claim* a dangling or takeover-
+  shaped resource. Confirming a takeover finding for real means actively
+  exploiting it, which is out of scope by design — the finding says
+  "potential" and states a confidence, never a certainty.
+- **No agent anywhere** sends a wordlist, brute-forces a path, submits a
+  form, or sends any request beyond `GET` / `HEAD` / `OPTIONS`. Discovery
+  paths are short, fixed, and named directly in the agent's own source —
+  never generated or expanded at runtime.
 
 ## Tech at a glance
 

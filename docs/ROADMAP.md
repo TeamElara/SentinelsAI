@@ -289,3 +289,22 @@ rather than landed as one batch:
 achievement's code runs, every achievement has a learning note, and A18's own
 bar — a stranger's clean clone completing a real scan with no undocumented
 step — was met and proven, not assumed.
+
+---
+
+## Beyond this roadmap
+
+The original 18 achievements above are the whole of Act 1-5's scope, and
+this file's `[x]`/18/18 status is unchanged since A18. Further work happens
+in its own numbered plan, each with the same "no code without its learning
+note" discipline, tracked in its own status header rather than back here:
+
+- [`docs/PLAN-v2.md`](PLAN-v2.md) — architecture extension (scans, evidence,
+  the deployment checklist, AI fix suggestions). Complete.
+- [`docs/PLAN-v3.md`](PLAN-v3.md) — GitHub repo scanning as a second scan
+  type. Complete.
+- [`docs/PLAN-v4.md`](PLAN-v4.md) — three new passive attack-surface agents
+  (API Security, Misconfiguration, Subdomain Security), scoring dedup/decay/
+  caps to keep an 8-agent scan honest, and the full test matrix behind it.
+  Complete, V1-V10 — see that file's own header for the milestone-by-milestone
+  record.

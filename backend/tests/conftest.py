@@ -11,6 +11,8 @@ from typing import Callable
 import httpx
 import pytest
 
+import db
+
 # {path: (status_code, headers, body)}
 Routes = dict[str, tuple[int, dict[str, str], str]]
 
@@ -44,3 +46,18 @@ def mock_site() -> Callable[[Routes], httpx.AsyncClient]:
         return httpx.AsyncClient(transport=_build_transport(routes), base_url=base_url)
 
     return _make
+
+
+@pytest.fixture
+def temp_db(tmp_path, monkeypatch):
+    """Point `db.DB_PATH` at a throwaway file for this test only, so storage
+    tests never touch the real dev database at `backend/data/sentinels.db`.
+
+    `storage/scans.py` and friends import `get_connection` from `db` and call
+    it fresh per operation, so patching `db.DB_PATH` before `init_db()` is
+    enough — every subsequent `get_connection()` call in the test opens the
+    temp file instead.
+    """
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    db.init_db()
+    return db.DB_PATH

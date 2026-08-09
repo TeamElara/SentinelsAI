@@ -162,6 +162,28 @@ RULES: list[ChecklistRule] = [
         agent="dns",
         evaluate=lambda f: _from_finding(f, "dmarc-record"),
     ),
+    ChecklistRule(
+        key="no_directory_listing",
+        title="Directory listing disabled",
+        tier="auto",
+        agent="misconfig",
+        evaluate=lambda f: _from_finding(f, "dir-listing"),
+    ),
+    ChecklistRule(
+        key="no_debug_output",
+        title="No debug output or stack traces exposed",
+        tier="auto",
+        agent="misconfig",
+        blocking=True,
+        evaluate=lambda f: _from_finding(f, "debug-output-exposed"),
+    ),
+    ChecklistRule(
+        key="no_dangling_dns",
+        title="No dangling DNS records",
+        tier="auto",
+        agent="subdomain",
+        evaluate=lambda f: _from_finding(f, "subdomain-dangling-dns"),
+    ),
     # ── Passively inferred ────────────────────────────────────────────────────
     ChecklistRule(
         key="no_version_disclosure",

@@ -100,7 +100,7 @@ async def _check_reachable(url: str, client: httpx.AsyncClient) -> None:
 
 
 async def _finalize(
-    url: str, start: float, agent_results: list[AgentResult]
+    url: str, start: float, agent_results: list[AgentResult], subdomains: list | None = None
 ) -> ScanReport:
     """Shared by both run functions: turn finished agent results into a report.
 
@@ -138,6 +138,7 @@ async def _finalize(
         readiness_score=readiness_score,
         deployment_status=deployment_status,
         checklist=checklist,
+        subdomains=subdomains or [],
     )
     save_scan(report)
     return report
@@ -155,7 +156,7 @@ async def run_scan(raw_url: str) -> ScanReport:
             *(agent_cls().run(context) for agent_cls in AGENTS)
         )
 
-    return await _finalize(url, start, list(agent_results))
+    return await _finalize(url, start, list(agent_results), context.shared.get("subdomains"))
 
 
 async def run_scan_stream(
@@ -194,5 +195,5 @@ async def run_scan_stream(
             agent_results.append(result)
             yield ("agent", result)
 
-    report = await _finalize(url, start, agent_results)
+    report = await _finalize(url, start, agent_results, context.shared.get("subdomains"))
     yield ("done", report)

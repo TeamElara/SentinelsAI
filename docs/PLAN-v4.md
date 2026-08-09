@@ -21,7 +21,109 @@
 > A live scan of `example.com` still scores exactly 54/F. Note:
 > [`learning/49-scoring-dedup.md`](learning/49-scoring-dedup.md).
 >
-> **Resume here:** V4.
+> V4 done, 2026-08-09. `backend/agents/api_security.py` (new) registered as
+> the 6th agent (`ApiSecurityAgent`, slug `api-security`) — HEAD-first,
+> budget/robots-gated discovery over the 11 planned paths; checks A/A2/B/C/
+> C2/D/E all implemented (docs, GraphQL, response leak, CORS,
+> content-type/cacheable, auth posture, risky methods), all soft-404-safe.
+> 19 tests green (`test_api_security.py`, 8 new). A live scan of
+> `example.com` still scores exactly 54/F (api-security added only a clean
+> PASS, 307ms). Note:
+> [`learning/50-api-security-agent.md`](learning/50-api-security-agent.md).
+>
+> V5 done, 2026-08-09. `backend/agents/misconfig.py` (new) registered as the
+> 7th agent (`MisconfigAgent`, slug `misconfig`) — checks A-G all
+> implemented (directory listing, backup/config files, debug output, server
+> version, risky methods, default/setup pages, unsafe caching); budget
+> exactly 18 requests/12s. `.env`/`.git` exclusion enforced by a dedicated
+> test. 35 tests green (`test_misconfig.py`, 16 new). A live scan of
+> `example.com` still scores exactly 54/F (misconfig added only an Info
+> PASS, 376ms). Note:
+> [`learning/51-misconfig-agent.md`](learning/51-misconfig-agent.md).
+>
+> V6 done, 2026-08-09. `backend/agents/subdomain.py` (new) registered as the
+> 8th agent (`SubdomainAgent`, slug `subdomain`) — discovery merges
+> certificate SANs (`tls.fetch_certificate`, now public), crt.sh CT logs,
+> and a 12-name common list, every candidate DNS-verified before inclusion;
+> `takeover_signatures.py` (new, data only) backs the honest three-outcome
+> takeover/dangling-DNS decision table. Structured inventory persisted via
+> migration v9 (`subdomains` table, `storage/subdomains.py`) and carried on
+> `ScanReport.subdomains`; `ScanContext.shared["subdomains"]` is how the
+> agent hands its inventory to `orchestrator._finalize`. Budget ≤40 DNS
+> lookups + ≤25 HTTP requests/15s, capped at 25 discovered hosts / 10
+> followed-up. 12 new tests (`test_subdomain.py`, 47 total, all green) —
+> DNS/CT/TLS are monkeypatched, never real network calls. A live scan of
+> `example.com` now scores 52/F (was 54) — `www.example.com` also missing
+> HSTS/CSP aliases onto the apex's existing base_id and decays to 50%
+> weight, exactly V3's dedup design; an expected score change per Decision
+> 4, not a regression. Note:
+> [`learning/52-subdomain-agent.md`](learning/52-subdomain-agent.md).
+>
+> V7 done, 2026-08-09. Three new checklist rules (`no_directory_listing`,
+> `no_debug_output` [blocking], `no_dangling_dns`) in
+> `backend/checklist/rules.py`, reusing the existing `_from_finding` helper
+> unchanged. `backend/ai/prompts.py`: `PROMPT_VERSION` → `"v3"`;
+> `build_analyst_messages` now splits findings into confirmed vs.
+> needs-verification by `confidence` (threshold 0.9, matching
+> `FindingRow.tsx`'s chip) and carries `affected_url` per line;
+> `ANALYST_SYSTEM` gained explicit anti-hallucination/anti-restatement
+> instructions; `build_chat_messages` gained `affected_url`/`confidence` per
+> finding and a new subdomain-inventory section. 9 new tests
+> (`test_checklist_v4.py`, 56 total, all green). Verified: a live 8-agent
+> scan of `example.com` with `GROQ_API_KEY` unset still returns a complete
+> report (`summary == ""`) at the same 52/F score as V6. Note:
+> [`learning/53-checklist-and-ai-integration.md`](learning/53-checklist-and-ai-integration.md).
+>
+> V8 done, 2026-08-09. `frontend/lib/api.ts` gained `SubdomainEntry` +
+> `ScanReport.subdomains`; `ScanProgress.tsx`'s grid went `sm:grid-cols-5` →
+> `sm:grid-cols-4` for 8 panels; new `SubdomainTable.tsx` renders the
+> inventory, sortable by issue count; the subdomain agent's detail page
+> fetches the full report only for that one slug. `AgentReel.tsx` and
+> `FindingRow.tsx` needed zero changes — both were already generic. Verified
+> live in the browser: 8 panels filled, final score 52/F (matches V6,
+> confirming zero backend logic touched), subdomain table rendered correctly.
+> Artwork for the 3 new agent plates still outstanding (not self-sourced).
+> Note: [`learning/54-frontend-attack-surface-ui.md`](learning/54-frontend-attack-surface-ui.md).
+>
+> V9 done, 2026-08-09. Three new test files — `test_probe.py` (16 tests:
+> `ResponseCache` concurrent dedup, `RobotsGate` allow/disallow, `Budget`
+> request+deadline cutoff, `safe_get/head/options` swallowing
+> Connect/Timeout/SSL errors), `test_findings_schema.py` (11 tests: a real
+> SQLite round trip via a new `temp_db` fixture — `affected_url`/
+> `confidence` survive save→load including the `confidence=0.0` falsy trap,
+> `SubdomainEntry.tls_valid`'s True/False/None round-trips through SQLite's
+> 0/1/NULL encoding, `get_scan`'s counts still exclude PASS findings),
+> `test_orchestrator.py` (7 tests: `normalize_url` rejects bad input, an
+> unreachable host raises the friendly `ValueError`, and — the matrix's
+> named acceptance case — one agent raising leaves the other seven results
+> intact and the report still completes, for both `run_scan` and
+> `run_scan_stream`). Plus targeted failure-case tests added to the three
+> V4-V6 agent files (malformed JSON, 403/404/429-everywhere, redirect
+> chains, a mid-scan DNS exception) — 45 new tests total, 101 passing (was
+> 56). No third-party site touched anywhere in the suite. Note:
+> [`learning/55-testing-the-untested-paths.md`](learning/55-testing-the-untested-paths.md).
+>
+> V10 done, 2026-08-09. `README.md`'s agent table grew to 8 rows plus a new
+> "What Sentinels does *not* do" section; `CLAUDE.md` gained the plan's two
+> non-negotiables (bounded probing, stated confidence) and its agent count;
+> `docs/ROADMAP.md` got a "Beyond this roadmap" pointer to PLAN-v2/v3/v4 (it
+> had never referenced any of them); `docs/ACTIVITY_LOG.md` got a closing
+> summary entry. Full end-to-end pass against a real running app (not just
+> the test suite): `example.com` live-scanned in the browser at 52/F, 8
+> panels; the same URL scanned twice via the API both times 52/F
+> (determinism); `wordpress.org` — a genuinely busier site — scored 61/D in
+> 22.5s with 11 discovered subdomains and zero agent errors; a throwaway
+> backend with `GROQ_API_KEY` forced empty still returned a complete 52/F
+> report with `summary: ""`; a scan stored on 2026-08-03 (pre-v4) reloaded
+> correctly at its original 54/F with exactly 5 agents and `subdomains: []`;
+> all three export formats (PDF/Markdown/JSON) for the `wordpress.org` scan
+> carry the three new agents' findings and the subdomain inventory,
+> confirmed by parsing them directly. Live verification caught one real gap
+> no test could have — the scan dialog's copy still said "Five agents" —
+> fixed in `ScanDialog.tsx` and reverified live. Note:
+> [`learning/56-shipping-v4.md`](learning/56-shipping-v4.md).
+>
+> **PLAN-v4 is complete — V1 through V10, all verified.**
 
 ---
 
@@ -334,6 +436,11 @@ test) before the next one starts.
 
 ### V4 — API Security agent
 
+> **Status:** done, 2026-08-09. All 7 checks (A, A2, B, C, C2, D, E)
+> implemented in `backend/agents/api_security.py`, registered as the 6th
+> agent. 8 new tests in `test_api_security.py` (19 total, all green). Note:
+> [`learning/50-api-security-agent.md`](learning/50-api-security-agent.md).
+
 **Files:** `+backend/agents/api_security.py`, `~backend/agents/registry.py`,
 `+backend/tests/test_api_security.py`
 
@@ -381,6 +488,11 @@ site with a public API (e.g. a public docs site you pick) under 12 s.
 ---
 
 ### V5 — Misconfiguration agent
+
+> **Status:** done, 2026-08-09. All 7 checks (A-G) implemented in
+> `backend/agents/misconfig.py`, registered as the 7th agent. 16 new tests
+> in `test_misconfig.py` (35 total, all green). Note:
+> [`learning/51-misconfig-agent.md`](learning/51-misconfig-agent.md).
 
 **Files:** `+backend/agents/misconfig.py`, `~backend/agents/registry.py`,
 `+backend/tests/test_misconfig.py`

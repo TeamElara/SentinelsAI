@@ -55,6 +55,22 @@ export interface Finding {
   confidence: number | null;              // 0-1; null = nothing to hedge, the check is certain
 }
 
+// Mirrors backend/models.py `SubdomainEntry` — one row of the subdomain
+// inventory the `subdomain` agent builds (PLAN-v4 §V6). Same precedent as
+// `RepoFileEntry`: a structured, non-Finding list carried on `ScanReport`.
+export interface SubdomainEntry {
+  host: string;
+  record_type: string;                    // "A" | "AAAA" | "CNAME"
+  record_value: string;
+  source: string;                         // "certificate" | "ct-log" | "common-name"
+  http_status: number | null;
+  scheme: string | null;                  // "https" | "http" | null
+  tls_valid: boolean | null;
+  server: string | null;
+  redirects_to: string | null;
+  issue_count: number;
+}
+
 export interface AgentResult {
   agent: string;
   findings: Finding[];
@@ -98,6 +114,7 @@ export interface ScanReport {
   readiness_score: number | null;         // 0-100, % of auto items passing
   deployment_status: string | null;       // "ready" | "caution" | "blocked"
   checklist: ChecklistItem[];
+  subdomains: SubdomainEntry[];           // [] for repo scans and pre-v4 stored scans
 }
 
 // Mirrors backend/models.py `RepoFileEntry` — one row of a repo scan's file

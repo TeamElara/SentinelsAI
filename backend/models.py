@@ -99,6 +99,24 @@ class Finding(BaseModel):
     confidence: Optional[float] = None
 
 
+class SubdomainEntry(BaseModel):
+    """One row of the subdomain inventory (PLAN-v4 §V6) — mirrors
+    `RepoFileEntry`'s precedent for a structured, non-Finding list carried
+    alongside a `ScanReport`.
+    """
+
+    host: str
+    record_type: str                        # "A" | "AAAA" | "CNAME"
+    record_value: str
+    source: str                              # "certificate" | "ct-log" | "common-name"
+    http_status: Optional[int] = None
+    scheme: Optional[str] = None             # "https" | "http" | None
+    tls_valid: Optional[bool] = None
+    server: Optional[str] = None
+    redirects_to: Optional[str] = None
+    issue_count: int = 0
+
+
 class AgentResult(BaseModel):
     """Everything one agent returns, plus timing for the live progress UI."""
 
@@ -131,6 +149,7 @@ class ScanReport(BaseModel):
     readiness_score: Optional[int] = None        # 0-100, % of auto items passing
     deployment_status: Optional[str] = None      # "ready" | "caution" | "blocked"
     checklist: list["ChecklistItem"] = Field(default_factory=list)
+    subdomains: list["SubdomainEntry"] = Field(default_factory=list)
 
 
 class AgentInfo(BaseModel):

@@ -1601,3 +1601,75 @@ this closing entry; it only records what already happened.
   the blow-by-blow rather than this summary.
 
 ---
+
+## 2026-08-09 — PLAN-v4: three new attack-surface agents (V1-V10)
+
+**Prompt/trigger:** "start with v9 and fully complete the plan" — picking the
+v4 plan back up after V1-V8 had already landed across earlier sessions on
+`v4-attack-surface-agents`, to finish V9 (the test matrix) and V10 (docs,
+learning notes, end-to-end verification) without stopping in between.
+
+**What shipped, V1-V10** (each already has its own learning note and its own
+detailed status block in [`docs/PLAN-v4.md`](PLAN-v4.md) — this entry is the
+summary, not the record):
+
+- **V1-V3 (foundation):** `Finding` gained `affected_url`/`confidence`; a
+  shared probe layer (`backend/agents/probe.py` — `ResponseCache`,
+  `RobotsGate`, `Budget`, `safe_get/head/options`) so three new agents share
+  fetches instead of tripling requests; `scoring.py` gained cross-agent
+  dedup, an alias table, repeat decay, and a per-new-agent 20-point cap so
+  eight agents seeing one real problem still cost one deduction.
+- **V4-V6 (the three agents):** `ApiSecurityAgent` (docs/GraphQL exposure,
+  CORS, response leaks, auth posture, risky methods — never invoked),
+  `MisconfigAgent` (directory listings, backup files, debug output, server
+  version, default/setup pages, unsafe caching), `SubdomainAgent`
+  (certificate SANs + Certificate Transparency + a 12-name list, every
+  candidate DNS-verified; dangling-DNS/takeover findings graded by an honest
+  `confidence`, never asserted as fact).
+- **V7 (integration):** three new checklist rules; the AI prompt layer
+  learned to split findings into confirmed vs. needs-verification by
+  `confidence` and carry `affected_url`.
+- **V8 (frontend):** the scan UI's agent grid went from 5 to 8 panels, plus a
+  new sortable subdomain-inventory table — `AgentReel.tsx`/`FindingRow.tsx`
+  needed zero changes, the payoff of having built both generically back in
+  earlier milestones.
+- **V9 (tests):** 45 new tests (56 → 101) — a proper `test_probe.py` and
+  `test_findings_schema.py` (the latter backed by a new `temp_db` fixture
+  that points `db.DB_PATH` at a throwaway SQLite file, so storage tests never
+  touch the real dev database), a new `test_orchestrator.py` proving the
+  project's core crash-isolation guarantee at the 8-agent scale (one agent
+  raising leaves the other seven results intact), and targeted failure-case
+  tests (malformed JSON, 403/404/429-everywhere, redirect chains, a mid-scan
+  DNS exception) added to the three new agents' existing test files.
+- **V10 (this entry):** `README.md`'s agent table grew to 8 rows plus a new
+  "What Sentinels does *not* do" section; `CLAUDE.md` gained the plan's two
+  new non-negotiables (bounded probing, confidence stated never implied) and
+  its agent count; this pointer entry and `docs/ROADMAP.md`'s "Beyond this
+  roadmap" section; the two remaining learning notes
+  ([`54`](learning/54-frontend-attack-surface-ui.md),
+  [`55`](learning/55-testing-the-untested-paths.md),
+  [`56`](learning/56-shipping-v4.md)); and a full end-to-end verification
+  pass (clean-site scan, an agent-kill test, same-site-twice determinism,
+  `GROQ_API_KEY` removed, a pre-v4 stored scan still rendering, and every
+  export format carrying the new findings).
+
+**Verification:** `pytest backend/tests -q` green (101 passed) offline, no
+third-party site touched by the suite; live-scan checks described above run
+against the real dev server, not assumed from the code — see V10's own
+status block in `PLAN-v4.md` for the exact numbers.
+
+**Where:** every file PLAN-v4.md's "Files at a glance" section names —
+`backend/agents/{api_security,misconfig,subdomain,probe,takeover_signatures}.py`,
+`backend/storage/subdomains.py`, `backend/tests/*`, `frontend/components/
+SubdomainTable.tsx`, plus the modified files it lists (`models.py`, `db.py`,
+`scoring.py`, `agents/{base,registry}.py`, `orchestrator.py`,
+`checklist/rules.py`, `ai/prompts.py`, the frontend agent-UI files,
+`README.md`, `CLAUDE.md`, `docs/ROADMAP.md`) and `docs/learning/47-56-*.md`.
+
+**Other notes:**
+- This entry summarizes rather than repeats — `docs/PLAN-v4.md`'s own header
+  carries the full milestone-by-milestone record (exact test counts, exact
+  live-scan scores, exact files touched per milestone); read that file for
+  the detail this entry deliberately compresses.
+
+---

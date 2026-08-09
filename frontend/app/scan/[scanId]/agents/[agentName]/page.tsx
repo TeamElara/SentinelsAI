@@ -13,8 +13,10 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAgents, fetchRepoAgents, fetchAgentResult } from "@/lib/agents";
-import type { AgentInfo, AgentResult } from "@/lib/api";
+import { fetchScan } from "@/lib/api";
+import type { AgentInfo, AgentResult, SubdomainEntry } from "@/lib/api";
 import { FindingRow } from "@/components/FindingRow";
+import { SubdomainTable } from "@/components/SubdomainTable";
 import { isProblem } from "@/lib/findings";
 
 function getVerdict(result: AgentResult): "clean" | "issues_found" | "failed" {
@@ -39,6 +41,10 @@ export default function AgentPage() {
   const [result, setResult] = useState<AgentResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // Only the subdomain agent's page needs the full report — every other
+  // agent's findings are entirely covered by `fetchAgentResult` above, so
+  // fetching the whole scan for them would just be an unused extra request.
+  const [subdomains, setSubdomains] = useState<SubdomainEntry[]>([]);
 
   useEffect(() => {
     Promise.all([
@@ -61,6 +67,12 @@ export default function AgentPage() {
       })
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
+
+    if (agentName === "subdomain") {
+      fetchScan(scanId)
+        .then((report) => setSubdomains(report.subdomains))
+        .catch(() => setSubdomains([]));
+    }
   }, [scanId, agentName]);
 
   if (loading) {
@@ -182,6 +194,8 @@ export default function AgentPage() {
           </ul>
         </section>
       )}
+
+      {agentName === "subdomain" && <SubdomainTable entries={subdomains} />}
 
       {problems.length > 0 ? (
         <section className="mt-16">

@@ -1,6 +1,6 @@
 # Sentinels — working conventions
 
-AI-powered **passive** website security auditor. URL in → 5 agents scan concurrently →
+AI-powered **passive** website security auditor. URL in → 8 agents scan concurrently →
 0–100 score + A–F grade + plain-language report, in under 60 seconds.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the 18-achievement build order and current position.
@@ -11,6 +11,22 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the 18-achievement build order and 
 requests to public paths. Never send attack traffic — no SQLi, no brute force, no
 fuzzing, no DoS, no automated form submission. This is a defensive/educational tool.
 If a feature idea requires sending something harmful, it's out of scope.
+
+## Non-negotiable: bounded probing
+
+Every agent declares a hard cap on how many requests it may issue against a target,
+and a wall-clock deadline (see `backend/agents/probe.py`'s `Budget`). No check may
+loop over an unbounded list. Caps are constants at the top of each agent file so
+they can be read in five seconds. Exhausting a budget stops further probing and
+reports itself honestly (`*-scan-partial`) — it is never a silent truncation.
+
+## Non-negotiable: confidence is stated, never implied
+
+Any finding that can't be proven from what was observed says so — in its title
+("Potential…"), in its wording ("manual verification recommended"), and in
+`Finding.confidence` (0.0–1.0, `None` = certain/not applicable). A guess is never
+upgraded into a claim. A CNAME pointing at a known hosting provider, for example,
+is never on its own a "takeover" — see `backend/agents/takeover_signatures.py`.
 
 ## Non-negotiable: every change gets explained
 
