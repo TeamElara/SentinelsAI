@@ -78,7 +78,7 @@ async def _finalize(
     findings = [finding for result in agent_results for finding in result.findings]
     duration_ms = int((time.perf_counter() - start) * 1000)
 
-    score = calculate_score(findings)
+    score = calculate_score(findings, raw_url)
     grade = grade_for_score(score)
     summary = await summarize(raw_url, score, grade, findings, target_type="repo")
 

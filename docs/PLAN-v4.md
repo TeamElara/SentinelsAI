@@ -10,7 +10,18 @@
 > V1 done, 2026-08-09. Slugs confirmed as planned; crt.sh confirmed in. Note:
 > [`learning/47-affected-url-and-confidence.md`](learning/47-affected-url-and-confidence.md).
 >
-> **Resume here:** V2.
+> V2 done, 2026-08-09. `ResponseCache`/`RobotsGate`/`Budget`/`safe_get`+co.
+> live in `backend/agents/probe.py`; `ScanContext` gained `cache`/`shared`,
+> both defaulted — a live scan of `example.com` still scores exactly 54/F.
+> Note: [`learning/48-shared-probe-layer.md`](learning/48-shared-probe-layer.md).
+>
+> V3 done, 2026-08-09. `calculate_score` gained dedup by `(base_id, host)`,
+> an `ALIASES` table, repeat decay, and a 20-point cap per new agent; test
+> infra (`pytest`, `conftest.py`'s `mock_site`) bootstrapped, 11 tests green.
+> A live scan of `example.com` still scores exactly 54/F. Note:
+> [`learning/49-scoring-dedup.md`](learning/49-scoring-dedup.md).
+>
+> **Resume here:** V4.
 
 ---
 
@@ -180,6 +191,15 @@ through save → load; frontend renders an unchanged finding exactly as before.
 ---
 
 ### V2 — Shared probe layer: one fetch cache, robots.txt, budgets
+
+> **Status:** done, 2026-08-09. Verified against `httpx.MockTransport`
+> (script, not yet a committed test — pytest infra is V3's job): two
+> concurrent `cache.get()` calls for the same URL produced exactly one
+> transport hit; `Disallow: /admin` made `allowed("/admin")` false while
+> `allowed("/pricing")` stayed true; `Budget(3, ...)` allowed exactly 3
+> requests then set `partial`. A live `run_scan("example.com")` after the
+> change still scored 54/F, matching V1's baseline exactly. Note:
+> [`learning/48-shared-probe-layer.md`](learning/48-shared-probe-layer.md).
 
 **Files:** `+backend/agents/probe.py`, `~backend/agents/base.py`
 

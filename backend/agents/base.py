@@ -3,7 +3,7 @@
 Two pieces:
 
 - `ScanContext` — everything an agent needs to do its job, built once per scan
-  and passed to all five agents. Keeps agents from each opening their own
+  and passed to all agents. Keeps agents from each opening their own
   connections or re-deriving the target URL.
 - `BaseAgent` — an abstract base class. Subclasses implement `scan()` only;
   `run()` is inherited as-is and gives every agent, for free, the guarantee
@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
 
+from agents.probe import ResponseCache
 from models import AgentResult, EvidenceItem, EvidenceKind, Finding
 
 
@@ -26,7 +27,11 @@ class ScanContext:
     """Read-only shared state for one scan, handed to every agent."""
 
     url: str                    # normalized target, e.g. "https://example.com"
-    client: httpx.AsyncClient   # one shared connection pool for all 5 agents
+    client: httpx.AsyncClient   # one shared connection pool for every agent
+    # Both default so every pre-existing agent and call site is untouched —
+    # only agents that opt in (V4-V6) ever look at these.
+    cache: ResponseCache = field(default_factory=ResponseCache)  # dedupes fetches across agents
+    shared: dict = field(default_factory=dict)                   # e.g. subdomain agent -> orchestrator
 
 
 class BaseAgent(ABC):
