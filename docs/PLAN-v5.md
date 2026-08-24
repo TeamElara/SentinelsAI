@@ -846,10 +846,64 @@ PR-merged/fix-verified rows newest-first, and the per-scan `/audit?scan=...` vie
 
 ---
 
-## Deferred beyond Stage E — not scoped yet
+## Stage F — the dependency version fixer
 
-- `remediation/dependencies.py` — a Tier 2 fixer for `dependency-*` findings. Needs its
-  own design pass for the registry-lookup dependency above.
+**Scoped 2026-08-24**, following three scoping questions confirmed in chat. Not built
+yet — this section is the design, the same discipline Stage D and E's own scoping
+passes followed before any code.
+
+- **Manifest scope, decided:** only a `dependency-*` finding traceable to a *direct*
+  pin — one of the three manifest kinds `agents/repo/dependencies.py` already parses
+  (`requirements.txt`'s `name==x.y.z`, `package.json`'s `dependencies`/`devDependencies`,
+  `pyproject.toml`'s PEP 621 list or Poetry table) — is fixable. A finding whose only
+  occurrence is inside `package-lock.json` (a transitive sub-dependency with no line of
+  its own in any manifest the agent's parsers touch) declines outright. Same "refuse to
+  guess" rule `WorkflowPinFixer` already follows for an ambiguous `uses:` line: bumping
+  a transitive version safely needs a real `npm`/`poetry` dependency resolve, which is
+  out of reach for a text-diff Fixer, and a hand-edited lockfile can drift from what
+  the package manager would actually resolve.
+- **Version source, decided — and corrected once during scoping:** the first draft of
+  this plan assumed the Fixer would need `Finding` to carry structured vulnerability
+  ids, since `agents/repo/dependencies.py`'s finding only puts them in `evidence` as a
+  comma-joined, five-capped string never meant to be re-parsed. Working through it
+  properly removed that need: `plan()` doesn't have to trust *anything* from the
+  finding except which file and which package to look at. It re-parses the manifest at
+  `finding.file_path` with the same parser functions the agent already owns (imported,
+  not duplicated) to find the current entry matching the finding's id scheme, reads
+  whatever version is pinned *right now*, and re-queries OSV.dev fresh for that exact
+  (ecosystem, name, version) — the identical `POST /v1/querybatch` shape the agent's
+  own `_query_osv` already makes. A clean result means the pin was already fixed since
+  the scan ran (`plan()` returns `None`, same honest "nothing left to do" every other
+  Fixer already answers with). A still-vulnerable result means fetching
+  `GET /v1/vulns/{id}` (unauthenticated, same OSV.dev) for each vulnerability id *that
+  fresh query returned* — never the finding's stale ones — to read `affected[].ranges[].events[].fixed`
+  per ecosystem, and the target is the highest `fixed` value across all of them, so one
+  patch clears every currently-known vulnerability against this pin, not just the one
+  the original finding happened to name.
+- **Decline conditions, decided:** refuse rather than guess, matching every existing
+  Fixer's own discipline — no `fixed` event at all for a relevant vulnerability (still
+  open, or OSV only records `last_affected`); a `fixed` value that isn't a plain
+  numeric dotted version this Fixer's comparator can order with confidence (a
+  pre-release suffix, a non-numeric segment); OSV unreachable at apply time (mirrors
+  the agent's own `_unverified_finding` — "couldn't check" is never treated as "safe").
+- **Batching, decided:** one `FixPlan` per finding, matching the finding model's own
+  granularity (`dependency-{ecosystem}-{name}-{version}-{file}` is already
+  package-specific) — not bundled per manifest file the way `SecurityHeaderFixer`
+  bundles all four header findings into one file edit. A repo with five vulnerable
+  pins gets five independent patches to apply selectively, and one declining doesn't
+  block the other four.
+
+**New, when built:** `remediation/dependencies.py`'s `DependencyVersionFixer` --
+`handles()` matches the `dependency-` prefix `tiers.py` already scores as tier 2, so no
+tier-table change is needed. `plan()` follows the shape above; the patch itself is
+`_resolve_pinned_version`'s rough inverse, one manifest kind at a time -- rewriting
+exactly the JSON value or `name==x.y.z` line the parser found, the same "smallest
+possible diff" discipline `rewrite_uses_line` already applies to a workflow file.
+
+---
+
+## Deferred beyond Stage F — not scoped yet
+
 - `remediation/secrets.py` (working name) — a Tier 2 fixer for `secret-env-committed-*`,
   plausibly gitignore-shaped (similar to `GitignoreFixer`) but touching a committed
   secret, so it needs its own read of CLAUDE.md's remediation rule 9 before it's built.
