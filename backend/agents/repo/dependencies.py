@@ -17,6 +17,7 @@ import json
 import re
 import tomllib
 from dataclasses import dataclass
+from typing import Callable
 
 import httpx
 
@@ -42,6 +43,25 @@ _REQ_LINE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*==\s*([A-Za-z0-9_.+
 _PEP508_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*==\s*([A-Za-z0-9_.+\-]+)")
 _SIMPLE_VERSION_RE = re.compile(r"^\d[\w.\-+]*$")
 
+# Checked longest-prefix-first where it matters (">=" before ">", "<=" before
+# "<") so an ambiguous range like ">=1.2.3" doesn't get misread as "> =1.2.3".
+_VERSION_PREFIXES = ("^", "~", ">=", "<=", ">", "<", "=")
+
+
+def split_version_prefix(raw: str) -> tuple[str, str]:
+    """Split a semver-range string into its prefix (if any) and the bare
+    value that follows -- `("^", "1.2.3")` for `"^1.2.3"`, `("", "1.2.3")`
+    for a bare pin. Shared with `remediation/dependencies.py` (PLAN-v5 Stage
+    F), which needs the prefix preserved exactly when bumping a pin -- losing
+    a "^" while rewriting the version underneath it would silently change
+    what the range means, not just which version it starts from.
+    """
+    v = raw.strip()
+    for prefix in _VERSION_PREFIXES:
+        if v.startswith(prefix):
+            return prefix, v[len(prefix):].strip()
+    return "", v
+
 
 def _resolve_pinned_version(raw: str) -> str | None:
     """Strip a semver-range prefix (^1.2.3, ~1.2.3, >=1.2.3) down to a bare
@@ -49,11 +69,7 @@ def _resolve_pinned_version(raw: str) -> str | None:
     -- a range like "1.0 || 2.0", a git/file/workspace URL, "*" -- since OSV
     needs one exact version to check, not a range.
     """
-    v = raw.strip()
-    for prefix in ("^", "~", ">=", "<=", ">", "<", "="):
-        if v.startswith(prefix):
-            v = v[len(prefix):].strip()
-            break
+    _, v = split_version_prefix(raw)
     if not v or " " in v or "||" in v or "*" in v:
         return None
     if v.startswith(("git", "file:", "workspace:", "link:", "http")):
@@ -159,6 +175,32 @@ _MANIFEST_PARSERS = {
 }
 
 
+def manifest_parser_for(path: str) -> Callable[[str, str], list[Dependency]] | None:
+    """The parser for `path`'s manifest kind, or `None` if it isn't one of
+    the direct-pin manifests this module knows how to read -- notably
+    `package-lock.json`, whose entries are resolved, transitive versions
+    with no line of their own to point at. Shared with
+    `remediation/dependencies.py` (PLAN-v5 Stage F) so the Fixer's notion of
+    "a manifest I can safely touch" can never drift from the agent's own:
+    a manifest this returns `None` for was never a *direct* pin to begin
+    with, and bumping it is a job for a real package-manager resolve, not a
+    text edit.
+    """
+    return _MANIFEST_PARSERS.get(path.rsplit("/", 1)[-1])
+
+
+def dependency_finding_id(dep: Dependency) -> str:
+    """The exact `Finding.id` a vulnerable `dep` produces. Shared with
+    `remediation/dependencies.py` so a Fixer can find the same entry in a
+    freshly re-parsed manifest by id, rather than duplicating this slug
+    scheme somewhere else and risking the two drifting apart.
+    """
+    file_slug = dep.source_file.replace("/", "-")
+    name_slug = dep.name.replace("/", "-").lower()
+    version_slug = dep.version.replace("/", "-")
+    return f"dependency-{dep.ecosystem.lower()}-{name_slug}-{version_slug}-{file_slug}"
+
+
 class DependenciesAgent(BaseRepoAgent):
     name = "repo-dependencies"
     display_name = "Dependencies"
@@ -256,13 +298,10 @@ class DependenciesAgent(BaseRepoAgent):
         return vuln_map
 
     def _vuln_finding(self, dep: Dependency, vuln_ids: list[str]) -> Finding:
-        file_slug = dep.source_file.replace("/", "-")
-        name_slug = dep.name.replace("/", "-").lower()
-        version_slug = dep.version.replace("/", "-")
         ids_text = ", ".join(vuln_ids[:5])
         evidence_text = f"{dep.ecosystem} {dep.name}@{dep.version} ({dep.source_file}) -- {ids_text}"
         return Finding(
-            id=f"dependency-{dep.ecosystem.lower()}-{name_slug}-{version_slug}-{file_slug}",
+            id=dependency_finding_id(dep),
             title=f"Known-vulnerable dependency: {dep.name}@{dep.version}",
             category="Dependencies",
             severity=Severity.HIGH,

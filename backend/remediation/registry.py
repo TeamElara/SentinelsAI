@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from models import Finding, Status
 from remediation.base import Fixer
+from remediation.dependencies import DependencyVersionFixer
 from remediation.dockerfile import DockerRootUserFixer
 from remediation.gitignore import GitignoreFixer
 from remediation.headers_fix import SecurityHeaderFixer
@@ -20,6 +21,7 @@ FIXERS: list[Fixer] = [
     EnvExampleFixer(),
     DockerRootUserFixer(),
     SecurityHeaderFixer(),
+    DependencyVersionFixer(),
 ]
 
 

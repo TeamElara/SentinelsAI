@@ -893,12 +893,24 @@ passes followed before any code.
   pins gets five independent patches to apply selectively, and one declining doesn't
   block the other four.
 
-**New, when built:** `remediation/dependencies.py`'s `DependencyVersionFixer` --
-`handles()` matches the `dependency-` prefix `tiers.py` already scores as tier 2, so no
-tier-table change is needed. `plan()` follows the shape above; the patch itself is
+**New:** `remediation/dependencies.py`'s `DependencyVersionFixer` -- `handles()` matches
+the `dependency-` prefix `tiers.py` already scores as tier 2, so no tier-table change
+was needed. `plan()` follows the shape above; the patch itself is
 `_resolve_pinned_version`'s rough inverse, one manifest kind at a time -- rewriting
 exactly the JSON value or `name==x.y.z` line the parser found, the same "smallest
 possible diff" discipline `rewrite_uses_line` already applies to a workflow file.
+
+**Done, 2026-08-25.** Writing `plan()` overturned the "version source" design above in
+one respect: no `Finding` model change was needed after all (see the note for why --
+`plan()` re-derives everything it needs from the manifest and a fresh OSV query, never
+trusting the finding's own stale `evidence`). Two small exports were added to
+`agents/repo/dependencies.py` (`dependency_finding_id`, `manifest_parser_for`,
+`split_version_prefix`) so the Fixer shares the agent's parsing and slug logic instead
+of duplicating it. 448 backend tests green (26 new, all offline against a mocked
+transport standing in for both GitHub's Contents API and OSV.dev at once). Not yet
+live-verified against a real vulnerable repo -- offline-only for this stage, unlike
+Stage D/E's real-account passes.
+**Note:** [`learning/70-the-dependency-version-fixer.md`](learning/70-the-dependency-version-fixer.md).
 
 ---
 
