@@ -1,12 +1,13 @@
 # 69 — Wiring the unlink button
 
-> **Status:** done. `frontend/components/fixes/FixPlanPanel.tsx` gains
-> `UnlinkRepoLine`, wired to the `unlinkScanRepo()` call that's existed in
-> `lib/api.ts` since Stage D but never had a button. `tsc --noEmit` and
-> ESLint clean. No live click-through: everything under `/scan/[id]` needs a
-> signed-in GitHub session (`current_user` on every route, checked in
-> `backend/main.py`), and this environment doesn't have one to sign in
-> with — see "Try it" for exactly what was and wasn't verified.
+> **Status:** done and live-verified. `frontend/components/fixes/FixPlanPanel.tsx`
+> gains `UnlinkRepoLine`, wired to the `unlinkScanRepo()` call that's existed
+> in `lib/api.ts` since Stage D but never had a button. `tsc --noEmit` and
+> ESLint clean. Full click-through against the real running app: needs-link
+> → link (real GitHub round trip against a real public repo) → "Linked to
+> octocat/Hello-World" → Unlink → back to idle → re-check → needs-link
+> again, confirmed at the database level, not just in React state. See
+> "Try it" for how a session was minted without a GitHub OAuth login.
 
 ## What we built
 
@@ -83,19 +84,54 @@ rule the rest of the file follows on purpose. Fetching the link status
 inside `check()` instead — right after confirming a plan came back, success
 or not — means it only ever happens on the same click the user already made.
 
+## How the live pass got a real session without a GitHub login
+
+Every route under `/scan/[id]` requires `current_user`, and there's no
+GitHub account to complete a real OAuth flow with from here. But
+`backend/tests/test_main_audit.py` already had the answer for authenticating
+without one: a session cookie is just a token plus an HMAC signature
+(`auth/session.py`), and the *only* thing the backend checks is that the
+signature matches `SENTINELS_SESSION_SECRET` and the token's hash exists in
+`sessions`. Reading that same secret out of `backend/.env` (the one the live
+dev server already has loaded) and calling `session.new_token()` +
+`storage.users.sign_in()` + `session.cookie_value()` — the exact three calls
+that test file's own fixture makes — mints a cookie the live server accepts
+as genuinely signed in, for the real dev account (`arihantjaino7`) that was
+already in the database. Setting `document.cookie` for the `localhost:8011`
+origin (cookies are stored per-origin, not per-page, so it doesn't matter
+that the frontend lives on `:3000`) put it in the browser's own jar, so
+every real fetch and every real click went through exactly the code paths a
+real sign-in would.
+
+The "link to a repository" half needed one more piece: a `github_installations`
+row. Rather than fake the repo too, its `account_login` was set to a real
+GitHub org (`octocat`) and the form was given a real, public repo name
+(`Hello-World`) — since `remediation/source.py` reads GitHub's Contents API
+unauthenticated for a plan preview (no installation token involved until
+Stage B's actual write), linking to it triggered a genuine network round
+trip, not a mock. `Hello-World` has no `vercel.json` or `next.config.*`, so
+`detect_stack` correctly declined and the finding landed on "no automatic
+fix" — an honest `unavailable` state to show the new unlink control in, not
+a scripted one.
+
+Both the fake installation row and the synthetic test scan were deleted
+after the pass (`storage.scans.delete_scan` + a matching `DELETE` on
+`github_installations`); the minted session was left alone since it's a
+real, valid session for the real dev account, no different from what an
+actual sign-in produces.
+
 ## Try it
 
 - `npx tsc --noEmit` and `npx eslint components/fixes/FixPlanPanel.tsx` from
   `frontend/` — both clean.
-- Read `backend/main.py`'s `scan_unlink_repo` (`DELETE
-  /scans/{scan_id}/link-repo`, line ~428) against `unlinkScanRepo` in
-  `lib/api.ts` — same path, same method, 404 mapped to the same
-  `raiseApiError` every other write in the file already uses.
-- **Not done this pass:** clicking the real button. `GET /scans/{id}` (and
-  every route under it) requires a signed-in session; this environment has
-  no GitHub account to complete that OAuth flow with, so the actual
-  click-Unlink-see-it-reset loop needs a live pass from a real session —
-  the same boundary noted in [68](68-telling-a-dead-session-from-a-dead-backend.md).
+- The full loop, live: `needs-link` (no installations shown until one
+  exists) → fill in the form, `Link repository` → real GitHub lookup →
+  `Reading the repo…` → `No automatic fix for this finding` +
+  `Linked to octocat/Hello-World` → `Unlink repository` → back to
+  `Check for automatic fix →` → click it again → `needs-link` reappears.
+  Independently confirmed via `GET /scans/{id}/link-repo` returning `null`
+  right after the click — the delete reached the database, not just the
+  React tree.
 
 ## Words worth knowing
 

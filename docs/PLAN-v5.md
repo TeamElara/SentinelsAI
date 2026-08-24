@@ -859,7 +859,11 @@ PR-merged/fix-verified rows newest-first, and the per-scan `/audit?scan=...` vie
 - ~~The small `unlinkScanRepo()` UI wiring gap noted above~~ — **done,
   2026-08-24.** `FixPlanPanel` shows "Linked to owner/repo · Unlink
   repository" once a check confirms a link, wired to the `unlinkScanRepo()`
-  call that already existed. Note:
+  call that already existed. Live-verified end to end (needs-link → link
+  against a real public repo → Unlink → needs-link again, confirmed at the
+  database level) using a locally-minted session for the real dev account,
+  the same signing/lookup `backend/tests/test_main_audit.py`'s fixture
+  already uses — no GitHub OAuth login available in that pass. Note:
   [`learning/69-wiring-the-unlink-button.md`](learning/69-wiring-the-unlink-button.md).
 
 `subdomain-dangling-dns` is not on this list. It was on the original one-line Stage E
