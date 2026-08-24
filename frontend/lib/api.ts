@@ -188,6 +188,33 @@ export interface ScanStreamHandlers {
   onError: (message: string) => void;
 }
 
+/* EventSource can't see HTTP status codes — a 401 (signed out, or the
+   session expired mid-scan) and a genuinely dead backend both surface as
+   the same opaque `onerror`. Every other call in this file resolves that
+   ambiguity via `checkAuth`'s redirect to `/login`; streams need their own
+   version since there's no Response here to check. `fetchMe` is one cheap
+   extra round-trip, paid only on the error path, never on a healthy scan.
+
+   `fetchMe` itself has no try/catch — a 401 resolves to `null` same as
+   always, but a backend that's actually unreachable makes its `fetch` throw
+   instead of resolving at all. Without catching that here too, the throw
+   would escape as an unhandled rejection and `onError` would never fire —
+   the exact silent-failure regression this function exists to avoid. */
+async function handleStreamError(handlers: ScanStreamHandlers): Promise<void> {
+  let me: SessionUser | null;
+  try {
+    me = await fetchMe();
+  } catch {
+    handlers.onError("Lost connection to the scanner.");
+    return;
+  }
+  if (me === null && typeof window !== "undefined") {
+    window.location.href = "/login";
+    return;
+  }
+  handlers.onError("Lost connection to the scanner.");
+}
+
 /**
  * Open a live connection to `GET /scan/stream` and report each agent as it
  * finishes, then the completed report. Returns a function that closes the
@@ -231,14 +258,12 @@ export function streamScan(url: string, handlers: ScanStreamHandlers): () => voi
   });
 
   source.onerror = () => {
-    // A genuine connection-level failure — the backend is unreachable, or
-    // the connection dropped before a "done" ever arrived. Per spec this
-    // should never fire for our own source.close() calls above (close() is
-    // not a connection error); verified for real in the learning note by
-    // killing the backend mid-scan and confirming this path, not silence,
-    // is what actually runs.
-    handlers.onError("Lost connection to the scanner.");
+    // Could be a genuine connection-level failure (backend unreachable, or
+    // the connection dropped before "done" arrived) or a 401 EventSource
+    // can't distinguish from one. handleStreamError tells them apart and
+    // redirects on the auth case instead of dead-ending on this message.
     source.close();
+    void handleStreamError(handlers);
   };
 
   return () => source.close();
@@ -273,8 +298,8 @@ export function streamRepoScan(repoUrl: string, handlers: ScanStreamHandlers): (
   });
 
   source.onerror = () => {
-    handlers.onError("Lost connection to the scanner.");
     source.close();
+    void handleStreamError(handlers);
   };
 
   return () => source.close();
