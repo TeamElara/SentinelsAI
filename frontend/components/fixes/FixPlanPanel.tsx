@@ -18,10 +18,13 @@ import {
   downloadFixBundle,
   fetchFixPlan,
   fetchInstallations,
+  fetchScanRepoLink,
   linkScanRepo,
   saveFixPlan,
+  unlinkScanRepo,
   type FixPlan,
   type GitHubInstallation,
+  type ScanRepoLink,
 } from "@/lib/api";
 import { FixApplyPanel } from "@/components/fixes/FixApplyPanel";
 
@@ -54,12 +57,23 @@ const TIER_LABEL: Record<number, string> = {
 export function FixPlanPanel({ scanId, findingKey, linkable = false }: Props) {
   const [state, setState] = useState<State>({ kind: "idle" });
   const [bundleError, setBundleError] = useState<string | null>(null);
+  // Only ever populated for a linkable (URL-scan) panel, and only once
+  // `check()` has actually confirmed a repository is linked -- fetching it
+  // eagerly on mount would fire one request per finding's own panel before
+  // anyone asked, the exact per-finding cost the module comment above says
+  // this component avoids on purpose.
+  const [repoLink, setRepoLink] = useState<ScanRepoLink | null>(null);
+  const [unlinking, setUnlinking] = useState(false);
+  const [unlinkError, setUnlinkError] = useState<string | null>(null);
 
   async function check() {
     setState({ kind: "loading" });
     try {
       const plan = await fetchFixPlan(scanId, findingKey);
       setState(plan ? { kind: "preview", plan } : { kind: "unavailable" });
+      if (linkable) {
+        fetchScanRepoLink(scanId).then(setRepoLink).catch(() => {});
+      }
     } catch (err) {
       if (linkable && err instanceof ApiError && /linked repository/.test(err.message)) {
         setState({ kind: "needs-link" });
@@ -82,6 +96,24 @@ export function FixPlanPanel({ scanId, findingKey, linkable = false }: Props) {
         kind: "error",
         message: err instanceof Error ? err.message : "Failed to link that repository.",
       });
+    }
+  }
+
+  // Unlinking invalidates whatever this panel already checked -- the plan
+  // (if any) was computed against a repository that's no longer linked, so
+  // dropping back to "idle" is the honest state, not a stale "Fix
+  // available" that a re-check would immediately contradict.
+  async function unlink() {
+    setUnlinking(true);
+    setUnlinkError(null);
+    try {
+      await unlinkScanRepo(scanId);
+      setRepoLink(null);
+      setState({ kind: "idle" });
+    } catch (err) {
+      setUnlinkError(err instanceof Error ? err.message : "Couldn't unlink that repository.");
+    } finally {
+      setUnlinking(false);
     }
   }
 
@@ -154,9 +186,19 @@ export function FixPlanPanel({ scanId, findingKey, linkable = false }: Props) {
   // so the click that got here doesn't feel like it went nowhere.
   if (state.kind === "unavailable") {
     return (
-      <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-        No automatic fix for this finding — try the AI suggestion below.
-      </p>
+      <div className="mt-3 space-y-2">
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+          No automatic fix for this finding — try the AI suggestion below.
+        </p>
+        {linkable && repoLink && (
+          <UnlinkRepoLine
+            repoLink={repoLink}
+            unlinking={unlinking}
+            error={unlinkError}
+            onUnlink={unlink}
+          />
+        )}
+      </div>
     );
   }
 
@@ -247,6 +289,15 @@ export function FixPlanPanel({ scanId, findingKey, linkable = false }: Props) {
       <p className="font-mono text-[8px] text-rule">
         Saving stores the plan. Nothing reaches GitHub until you approve the pull request below.
       </p>
+
+      {linkable && repoLink && (
+        <UnlinkRepoLine
+          repoLink={repoLink}
+          unlinking={unlinking}
+          error={unlinkError}
+          onUnlink={unlink}
+        />
+      )}
 
       {/* PLAN-v5 Stages B + C. Mounted only once a plan exists, so a findings
           list full of unfixable findings costs no requests. */}
@@ -345,6 +396,45 @@ function LinkRepoForm({
       >
         Cancel
       </button>
+    </div>
+  );
+}
+
+/* The other end of LinkRepoForm above -- once `check()` has confirmed which
+   repository is linked, this is the one place in the UI that can undo it
+   (PLAN-v5 Stage D's `unlinkScanRepo` was plumbed through Stage E but never
+   wired to a control until now). Unlinking here doesn't remove the
+   installation itself -- that's Settings' job -- only this scan's bridge
+   to it. */
+function UnlinkRepoLine({
+  repoLink,
+  unlinking,
+  error,
+  onUnlink,
+}: {
+  repoLink: ScanRepoLink;
+  unlinking: boolean;
+  error: string | null;
+  onUnlink: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+        Linked to {repoLink.owner}/{repoLink.repo}
+      </p>
+      <button
+        type="button"
+        disabled={unlinking}
+        onClick={onUnlink}
+        className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-critical disabled:opacity-40"
+      >
+        {unlinking ? "Unlinking…" : "Unlink repository"}
+      </button>
+      {error && (
+        <p className="w-full font-mono text-[10px] uppercase tracking-[0.2em] text-critical">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

@@ -856,8 +856,11 @@ PR-merged/fix-verified rows newest-first, and the per-scan `/audit?scan=...` vie
 - `netlify.toml` / `nginx.conf` header fixers — extends `remediation/stack.py` and
   `remediation/headers_fix.py`'s `SecurityHeaderFixer` to the two stacks Stage D
   scoped out.
-- The small `unlinkScanRepo()` UI wiring gap noted above — a one-file frontend fix
-  whenever someone picks it up, not a stage on its own.
+- ~~The small `unlinkScanRepo()` UI wiring gap noted above~~ — **done,
+  2026-08-24.** `FixPlanPanel` shows "Linked to owner/repo · Unlink
+  repository" once a check confirms a link, wired to the `unlinkScanRepo()`
+  call that already existed. Note:
+  [`learning/69-wiring-the-unlink-button.md`](learning/69-wiring-the-unlink-button.md).
 
 `subdomain-dangling-dns` is not on this list. It was on the original one-line Stage E
 note and does not belong on any future one either, per the correction above.
