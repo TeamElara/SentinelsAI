@@ -61,7 +61,7 @@ async function handleStreamError(handlers: ScanStreamHandlers): Promise<void> {
 }
 ```
 
-That's the version that reached this session uncommitted. Live-testing it
+That's the version that existed before this fix, uncommitted. Live-testing it
 against a genuinely unreachable backend caught the bug: `fetchMe` has no
 `try`/`catch` of its own —
 

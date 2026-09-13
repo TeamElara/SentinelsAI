@@ -23,6 +23,9 @@ npm-debug.log*
 
 # Third-party Claude Code skills (vendor data, reproducible via their installer)
 .claude/
+CLAUDE.md
+AGENTS.md
+docs/ACTIVITY_LOG.md
 
 # Editors / OS
 .vscode/
