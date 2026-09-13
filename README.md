@@ -4,7 +4,7 @@
 report in seconds — no attacks, no exploitation, nothing sent that a normal
 browser wouldn't send.
 
-![Input screen](docs/images/input-screen.png)
+![Choosing what to scan — a GitHub repository or a website URL](docs/images/landing.png)
 
 ## The passive-only ethic
 
@@ -45,7 +45,7 @@ subdomain missing the same header the apex is already flagged for), scoring
 deduplicates, decays repeats, and caps each new agent's total penalty — see
 [`docs/PLAN-v4.md`](docs/PLAN-v4.md) §V3 for the exact rules.
 
-![Report screen](docs/images/report-screen.png)
+![Graded report for a website scan — score, grade, severity breakdown, and a plain-language assessment](docs/images/report.png)
 
 ## What Sentinels does *not* do
 
@@ -67,6 +67,29 @@ an attack, even where the extra step would find more:
   form, or sends any request beyond `GET` / `HEAD` / `OPTIONS`. Discovery
   paths are short, fixed, and named directly in the agent's own source —
   never generated or expanded at runtime.
+
+## Fixing what it finds
+
+Connect a GitHub account and Sentinels can fix some findings itself — not with
+a model. A deterministic Fixer is plain Python: same finding, same repo state,
+same patch, every time. The AI layer never writes a security patch, only
+explanations.
+
+![A deterministic fix, previewed as a unified diff before anything is written](docs/images/autofix.png)
+
+Every fix follows the same rule, no exceptions:
+
+- **Preview before writing.** The exact diff is shown and approved before a
+  single byte reaches GitHub.
+- **Its own branch, always.** A `sentinels/…` branch and one pull request —
+  never a commit to the default branch, never a force-push.
+- **Sentinels never merges.** The PR is opened; a human reviews it and merges
+  it on GitHub. Verification re-runs the responsible agent afterward and shows
+  the real score delta — a fix isn't "done" because a PR opened, it's done
+  when the re-scan proves it.
+- **Confidence-gated.** Only findings with a known-safe deterministic fixer
+  are ever auto-applied; everything else — and every `*-scan-partial` — is
+  suggest-only.
 
 ## Tech at a glance
 
