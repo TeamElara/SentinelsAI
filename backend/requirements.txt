@@ -1,13 +1,13 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
 httpx==0.28.1
 dnspython==2.7.0
 beautifulsoup4==4.12.3
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 pydantic==2.10.4
 playwright==1.61.0
 # PLAN-v5 Stage B: a GitHub App proves it is itself with an RS256-signed JWT,
 # so signing needs an asymmetric-key implementation. PyJWT is the encoding;
 # cryptography is the RSA it delegates to (PyJWT alone only does HMAC).
-PyJWT==2.10.1
-cryptography==44.0.0
+PyJWT==2.14.0
+cryptography==50.0.1
