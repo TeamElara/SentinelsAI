@@ -9,6 +9,7 @@ Run locally:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,6 +69,7 @@ from auth.session import (  # noqa: E402
 from db import init_db  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
+from rate_limit import enforce_scan_rate_limit  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
 from remediation.planning import NotARepoScan, build_bundle_zip, plan_and_save, preview_plan  # noqa: E402
@@ -85,6 +87,17 @@ from storage.remediation import list_audit, list_audit_for_user  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
 from storage.scans import delete_scan, get_scan, list_scans, scan_owner, update_checklist_item  # noqa: E402
 from storage.users import delete_session, sign_in  # noqa: E402
+
+# A plain stdlib config, not a vendor logging service: every deploy target
+# this project actually uses (Render, `uvicorn` locally) already captures
+# stdout/stderr as its log stream, so the only thing missing was a consistent
+# format and a level. Anything code below logs via `logging.getLogger(__name__)`
+# — a plain per-module logger, not this root logger directly — so a log line
+# always carries the module that produced it.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 # Creates backend/data/sentinels.db and brings its schema up to date if it
 # isn't already — safe to call on every startup (see db.init_db's docstring).
@@ -104,20 +117,28 @@ app = FastAPI(
 # response from the other. This middleware sends the headers that grant that
 # permission explicitly.
 #
-# Listing the two dev origins rather than allow_origins=["*"] is deliberate:
-# a wildcard would let a page on *any* site drive this API using the visitor's
+# Listing explicit origins rather than allow_origins=["*"] is deliberate: a
+# wildcard would let a page on *any* site drive this API using the visitor's
 # machine as the source of the scan traffic. For a tool that makes outbound
 # requests to third-party sites, that's a genuinely bad default to ship.
+#
+# The two localhost origins keep a fresh clone working with no configuration;
+# get_frontend_origin() (same env var the post-sign-in redirect already uses)
+# adds the deployed frontend's real origin once SENTINELS_FRONTEND_ORIGIN is
+# set, so production doesn't need a second place to name that URL.
 #
 # allow_credentials=True (PLAN-v5 Stage 0) is what lets the browser attach the
 # session cookie to a cross-port request at all — without it the cookie is
 # silently dropped and every protected route looks like it's rejecting a
 # signed-in user. The two are a package deal in the CORS spec: a wildcard
 # origin and allow_credentials cannot be combined, which is one more reason
-# the explicit two-origin list above was already the right call.
+# the explicit origin list above was already the right call.
+_DEPLOYED_FRONTEND_ORIGIN = get_frontend_origin()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=list(
+        {"http://localhost:3000", "http://127.0.0.1:3000", _DEPLOYED_FRONTEND_ORIGIN}
+    ),
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
     allow_credentials=True,
@@ -127,10 +148,18 @@ app.add_middleware(
 # never drift apart — a cookie set with one set of flags and cleared with
 # another can end up not actually clearing (the browser treats "same name,
 # different path/attrs" as a different cookie).
+#
+# secure follows the deployed frontend's own scheme rather than being a fixed
+# True/False: True unconditionally would break local http://localhost dev
+# (browsers refuse to send a Secure cookie over plain HTTP), and False
+# unconditionally would ship a session cookie that travels over plain HTTP in
+# production. SENTINELS_FRONTEND_ORIGIN starting with https:// is already the
+# signal for "this is a real deployment," so it doubles as this one too.
 _COOKIE_KWARGS = dict(
     key=COOKIE_NAME,
     httponly=True,       # invisible to page JavaScript — an XSS bug can't read it
     samesite="lax",      # sent on top-level navigation, not on cross-site POSTs
+    secure=_DEPLOYED_FRONTEND_ORIGIN.startswith("https://"),
     path="/",
 )
 
@@ -442,6 +471,7 @@ async def scan(request: ScanRequest, user: User = Depends(current_user)) -> Scan
     genuinely awaits something — `run_scan` awaits real HTTP requests inside
     the agents it calls.
     """
+    enforce_scan_rate_limit(user.id)
     try:
         return await run_scan(request.url, user_id=user.id)
     except ValueError as exc:
@@ -463,6 +493,7 @@ async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) ->
     independently reachable and verifiable over real HTTP, the same way
     every other milestone in this codebase has been.
     """
+    enforce_scan_rate_limit(user.id)
     try:
         return await run_repo_scan(request.url, user_id=user.id)
     except ValueError as exc:
@@ -494,8 +525,12 @@ async def scan_stream(url: str, user: User = Depends(current_user)) -> Streaming
 
     `Depends(current_user)` runs — and can 401 — before this function body
     starts, so an unauthenticated `EventSource` never gets as far as opening
-    the stream.
+    the stream. The rate-limit check runs here too, for the same reason: a
+    429 raised before `StreamingResponse` is constructed is a normal HTTP
+    error response; raised from inside `events()` it would just be another
+    in-band SSE message after a 200 already went out.
     """
+    enforce_scan_rate_limit(user.id)
 
     async def events():
         try:
@@ -520,6 +555,7 @@ async def repo_scan_stream(url: str, user: User = Depends(current_user)) -> Stre
     committed by the time it's known), a different generator underneath
     (`repo_orchestrator.run_repo_scan_stream`).
     """
+    enforce_scan_rate_limit(user.id)
 
     async def events():
         try:
