@@ -30,7 +30,7 @@ export default function RepoScanPage() {
           placeholder="github.com/owner/repo"
           footnote={
             <p className="mt-16 max-w-md font-mono text-xs leading-relaxed text-muted">
-              Passive inspection only. Sentinels reads a public repository's
+              Passive inspection only. Sentinels reads a public repository&apos;s
               files — it never executes anything it finds, and never writes
               back. Secrets are reported masked, never in full.
             </p>

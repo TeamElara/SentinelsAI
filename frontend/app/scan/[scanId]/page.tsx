@@ -204,7 +204,7 @@ export default function ScanPage() {
             Not found
           </p>
           <p className="mt-4 font-display text-2xl">
-            This scan doesn't exist.
+            This scan doesn&apos;t exist.
           </p>
           <Link
             href="/"

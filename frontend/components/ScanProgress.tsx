@@ -30,11 +30,19 @@ export function ScanProgress({
 }) {
   const [agentNames, setAgentNames] = useState<string[]>(FALLBACK_NAMES[targetType]);
 
+  // Reset to the right fallback list the instant targetType changes, during
+  // render rather than in an Effect — React's own pattern for "adjusting
+  // state when a prop changes" (avoids an extra render showing stale names).
+  const [prevTargetType, setPrevTargetType] = useState(targetType);
+  if (targetType !== prevTargetType) {
+    setPrevTargetType(targetType);
+    setAgentNames(FALLBACK_NAMES[targetType]);
+  }
+
   // Fetch the real agent list so adding a 6th agent to either registry is
   // enough — no frontend change needed. Falls back to FALLBACK_NAMES silently.
   useEffect(() => {
     const fetchList = targetType === "repo" ? fetchRepoAgents : fetchAgents;
-    setAgentNames(FALLBACK_NAMES[targetType]);
     fetchList().then((agents) => {
       if (agents.length > 0) setAgentNames(agents.map((a) => a.name));
     });
