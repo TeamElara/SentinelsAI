@@ -132,10 +132,18 @@ app.add_middleware(
 # never drift apart — a cookie set with one set of flags and cleared with
 # another can end up not actually clearing (the browser treats "same name,
 # different path/attrs" as a different cookie).
+# The deployed frontend (Vercel) and API (Render) live on different sites, so
+# browsers only send the session cookie back to the API when it is explicitly
+# marked SameSite=None and Secure.  Local development stays on localhost,
+# where the stricter cross-site flags would make an HTTP dev server unusable.
+_frontend_host = urlparse(get_frontend_origin()).hostname
+_is_local_frontend = _frontend_host in {"localhost", "127.0.0.1"}
+
 _COOKIE_KWARGS = dict(
     key=COOKIE_NAME,
     httponly=True,       # invisible to page JavaScript — an XSS bug can't read it
-    samesite="lax",      # sent on top-level navigation, not on cross-site POSTs
+    samesite="lax" if _is_local_frontend else "none",
+    secure=not _is_local_frontend,
     path="/",
 )
 
