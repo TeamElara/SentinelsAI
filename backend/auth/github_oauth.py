@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -55,6 +56,22 @@ def get_frontend_origin() -> str:
     frontend side — so a fresh clone works with no configuration at all.
     """
     return os.environ.get("SENTINELS_FRONTEND_ORIGIN") or "http://localhost:3000"
+
+
+def get_callback_url(request_callback_url: str) -> str:
+    """Return GitHub's OAuth callback URL for this deployment.
+
+    In production the browser talks to the API through a same-origin Vercel
+    rewrite.  Sending GitHub back through that rewrite lets the browser store
+    the session cookie on the frontend origin, avoiding third-party-cookie
+    blocking between Vercel and Render.  Local development keeps the direct
+    FastAPI callback.
+    """
+    frontend = get_frontend_origin().rstrip("/")
+    host = urlparse(frontend).hostname
+    if host not in {"localhost", "127.0.0.1", None}:
+        return f"{frontend}/api/auth/github/callback"
+    return request_callback_url
 
 
 def oauth_configured() -> bool:

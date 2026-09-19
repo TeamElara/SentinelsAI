@@ -28,7 +28,7 @@ import { HeroPuzzle } from "@/components/landing/HeroPuzzle";
 import { SmoothScroll } from "@/components/landing/SmoothScroll";
 import { ScrollCursor } from "@/components/landing/ScrollCursor";
 import { ScanTypeSelect } from "@/components/landing/scan-select/ScanTypeSelect";
-import { githubLoginUrl } from "@/lib/api";
+import { GitHubSignIn } from "@/components/landing/GitHubSignIn";
 
 export default function LandingPage() {
   return (
@@ -36,14 +36,7 @@ export default function LandingPage() {
       {/* A direct, always-visible entry point to the GitHub-only sign-in
           screen.  Scans remain available without an account, while signing
           in unlocks repository connections and fix pull requests. */}
-      <a
-        href={githubLoginUrl()}
-        className="fixed right-5 top-5 z-50 border border-parchment/35 bg-black/75 px-4 py-2
-                   font-mono text-[10px] uppercase tracking-[0.18em] text-parchment
-                   backdrop-blur transition-colors hover:bg-white/15 sm:right-8 sm:top-8"
-      >
-        Sign in with GitHub
-      </a>
+      <GitHubSignIn />
 
       {/* The trailing "scroll down" label. Sits outside <main> because it is
           fixed-position chrome, not part of the document flow. */}

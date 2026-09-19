@@ -129,7 +129,12 @@ export interface RepoFileEntry {
 // NEXT_PUBLIC_ is required for a variable to reach browser code at all; without
 // that prefix Next.js keeps it server-side. The fallback is the dev default, so
 // the app runs with no .env file present.
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+// Production requests use Vercel's `/api` rewrite, making the session cookie
+// first-party.  Local HTTP development continues to call FastAPI directly.
+export const API_BASE =
+  typeof window !== "undefined" && window.location.protocol === "https:"
+    ? "/api"
+    : process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 /* PLAN-v5 Stage 0: every protected route now requires a session cookie. Two
    small, shared pieces make that true everywhere without hand-editing every
