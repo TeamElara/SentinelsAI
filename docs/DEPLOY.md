@@ -52,12 +52,33 @@ Vercel → New Project → import this repo → set **Root Directory** to
 
 ## 3. After both are live
 
-- Update the GitHub App's **Callback URL** and **Homepage URL** (App settings
-  page) to point at the Vercel domain instead of `localhost:3000`.
+- Update the GitHub App's **Homepage URL** (App settings page) to the Vercel
+  domain instead of `localhost:3000`.
+- Set the GitHub App's **Callback URL** to
+  `https://<your-vercel-domain>/api/auth/github/callback` — note the
+  `/api/auth/github/callback` path, not the bare Vercel domain and not the
+  Render backend's own `/auth/github/callback`. Vercel and Render are
+  different origins, so a cookie Render sets directly is third-party to the
+  browser and gets blocked by Safari/Firefox (and increasingly Chrome).
+  `backend/auth/github_oauth.py`'s `get_callback_url()` sends GitHub through
+  a same-origin Next.js route (`frontend/app/api/auth/github/{login,callback}/route.ts`)
+  instead, which re-sets the session cookie on the Vercel domain so every
+  later `/api/*` call from the browser carries a first-party cookie. If the
+  App's registered Callback URL doesn't match this path exactly, GitHub
+  refuses the OAuth attempt outright.
 - Confirm `SENTINELS_FRONTEND_ORIGIN` on Render exactly matches that Vercel
   domain (scheme + host, no trailing slash) — a mismatch here is the most
   likely first bug: it'll show up as `state_mismatch` on sign-in or CORS
   rejections in the browser console, not a clean error message.
+- On the App's installation page (org or account settings → Installations),
+  confirm it actually shows the **permissions** the App requests (Contents,
+  Pull requests, Metadata, Workflows — see "What only the developer can do"
+  in `docs/PLAN-v5.md`) and has a **repository** selected. An installation
+  showing "No permissions" / "No repositories" means the App itself currently
+  requests zero permissions on its own settings page — fix that on
+  `github.com/settings/apps/<slug>` → Permissions & events first, then
+  reinstall/accept the upgrade; there is nothing to configure per-installation
+  until the App is requesting something.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

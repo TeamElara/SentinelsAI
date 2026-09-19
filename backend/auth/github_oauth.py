@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -55,6 +56,26 @@ def get_frontend_origin() -> str:
     frontend side — so a fresh clone works with no configuration at all.
     """
     return os.environ.get("SENTINELS_FRONTEND_ORIGIN") or "http://localhost:3000"
+
+
+def get_callback_url(request_callback_url: str) -> str:
+    """Where GitHub should send the browser back to after sign-in.
+
+    Locally the frontend and API share `localhost`, so a cookie the API sets
+    is already first-party and the direct FastAPI callback works fine. Once
+    they're on different domains (Vercel + Render), a cookie set by Render is
+    third-party from the browser's point of view — exactly the kind of cookie
+    Safari and Firefox block by default and Chrome is moving toward blocking
+    too. Routing the callback through a same-origin Next.js route instead
+    (`{frontend}/api/auth/github/callback`, added alongside this function)
+    lets the frontend re-set that cookie on its own domain, so it's first-party
+    everywhere and isn't relying on cross-site cookie support at all.
+    """
+    frontend = get_frontend_origin().rstrip("/")
+    host = urlparse(frontend).hostname
+    if host not in {"localhost", "127.0.0.1", None}:
+        return f"{frontend}/api/auth/github/callback"
+    return request_callback_url
 
 
 def oauth_configured() -> bool:
