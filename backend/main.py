@@ -50,7 +50,6 @@ from auth.github_oauth import (  # noqa: E402
     exchange_code,
     fetch_identity,
     get_app_slug,
-    get_callback_url,
     get_frontend_origin,
     install_url,
     missing_settings,
@@ -187,7 +186,7 @@ def auth_login(request: Request) -> RedirectResponse:
             detail=f"GitHub sign-in is not configured. Missing: {', '.join(missing_settings())}.",
         )
     state = secrets.token_urlsafe(24)
-    redirect_uri = get_callback_url(str(request.url_for("auth_callback")))
+    redirect_uri = str(request.url_for("auth_callback"))
     response = RedirectResponse(authorize_url(state, redirect_uri))
     response.set_cookie(
         "sentinels_oauth_state", state, httponly=True, samesite="lax", max_age=600, path="/",
@@ -220,7 +219,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
     if secret is None:
         return _fail("server_not_configured")
 
-    redirect_uri = get_callback_url(str(request.url_for("auth_callback")))
+    redirect_uri = str(request.url_for("auth_callback"))
     token = await exchange_code(code, redirect_uri)
     if token is None:
         return _fail("exchange_failed")
