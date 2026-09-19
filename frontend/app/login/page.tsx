@@ -33,7 +33,7 @@ function LoginError() {
 export default function LoginPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 px-6 text-center">
-      <h1 className="font-display text-4xl text-parchment">Sentinels</h1>
+      <h1 className="font-display text-4xl text-parchment">Sentinels by TeamElara</h1>
       <p className="max-w-sm text-sm leading-relaxed text-muted">
         Sign in with GitHub to run scans and, once connected, open pull
         requests for fixes on repositories you authorize.

@@ -357,7 +357,7 @@ export function Footer() {
           </div>
 
           <p className="mt-16 font-mono text-[10px] uppercase tracking-[0.2em] text-muted lg:mt-24">
-            Sentinels — passive website security inspection
+            Sentinels by TeamElara — passive website security inspection
           </p>
         </div>
       </footer>
