@@ -95,7 +95,7 @@ export default function LandingPage() {
                 data-hero-subtitle
                 className="mt-[1.8vh] max-w-none font-mono text-xl leading-[1.5] text-muted opacity-0 will-change-transform sm:max-w-[54.4vw] sm:text-2xl"
               >
-                Sentinels by TeamElara · AI-Powered Autonomous Website Security Auditor
+                AI-Powered Autonomous Website Security Auditor
               </p>
             </>
           }

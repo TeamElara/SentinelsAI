@@ -115,14 +115,9 @@ app = FastAPI(
 # signed-in user. The two are a package deal in the CORS spec: a wildcard
 # origin and allow_credentials cannot be combined, which is one more reason
 # the explicit two-origin list above was already the right call.
-cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
-deployed_frontend_origin = get_frontend_origin().rstrip("/")
-if deployed_frontend_origin not in cors_origins:
-    cors_origins.append(deployed_frontend_origin)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
     allow_credentials=True,

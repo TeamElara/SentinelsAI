@@ -50,7 +50,7 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinels by TeamElara — passive website security inspection",
+  title: "Sentinels — passive website security inspection",
   description:
     "Reads a site's headers, certificate, DNS records and robots.txt, then issues a graded inspection report. Never sends attack traffic.",
 };
