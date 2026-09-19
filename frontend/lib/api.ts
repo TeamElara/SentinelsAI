@@ -134,10 +134,12 @@ export interface RepoFileEntry {
 // Render by next.config.ts's rewrite) instead of the Render URL directly, so
 // the session cookie stays first-party and isn't relying on cross-site cookie
 // support at all. Local http:// development keeps calling FastAPI directly.
-export const API_BASE =
-  typeof window !== "undefined" && window.location.protocol === "https:"
-    ? "/api"
-    : process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+//
+// Decided from the configured URL, not `window`: pages are server-rendered
+// first, where `window` doesn't exist, and a server-rendered href is kept as-is
+// after hydration — so a window check put Render's direct URL into every link.
+const CONFIGURED_API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+export const API_BASE = CONFIGURED_API_BASE.startsWith("https://") ? "/api" : CONFIGURED_API_BASE;
 
 /* PLAN-v5 Stage 0: every protected route now requires a session cookie. Two
    small, shared pieces make that true everywhere without hand-editing every
