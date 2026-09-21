@@ -945,7 +945,7 @@ Stage D/E's real-account passes.
   built.~~ — **done, 2026-09-21, as part of Stage G.** Built exactly as
   `remediation/secrets.py`, delete-only, gated by a small allowlist extension. See
   "Stage G" below.
-- `netlify.toml` / `nginx.conf` header fixers — extends `remediation/stack.py` and
+- ~~`netlify.toml` / `nginx.conf` header fixers~~ — **done, 2026-09-21, Stage I.** Was: extends `remediation/stack.py` and
   `remediation/headers_fix.py`'s `SecurityHeaderFixer` to the two stacks Stage D
   scoped out.
 - ~~The small `unlinkScanRepo()` UI wiring gap noted above~~ — **done,
@@ -1041,6 +1041,29 @@ fixers. A read-only run against `arihantjaino7/some-action-v1` confirmed the REA
 fixer plans live and the license/env-example fixers decline correctly; NodeGoat's
 lockfile-only dependency findings all declined, as designed. The remaining fixers need a
 purpose-built fixture repo plus the GitHub App key, which only the developer has.
+
+---
+
+## Stage I — Phase 3: netlify.toml and nginx.conf header fixers
+
+**Done, 2026-09-21.** `remediation/stack.py` detects two more stacks, in the order
+Vercel → Netlify → nginx (`nginx.conf` at the repo root) → Next.js: platform/edge
+config sets the header before a framework config gets a say. `SecurityHeaderFixer`
+gained both:
+
+- **Netlify:** parses with stdlib `tomllib` (malformed → declines), then appends a
+  `[[headers]] for = "/*"` block holding only the headers not already set
+  (case-insensitive); all four present → declines. Appending a table is valid TOML
+  wherever the file ends, so nothing existing is rewritten.
+- **nginx:** inserts `add_header ... always;` lines right after the first `server {`
+  (indented to match), skipping headers already present; no `server` block → declines.
+  The PR body warns that an `add_header` inside a `location` overrides server-level ones.
+
+`LINK_REPO_FIXER_PATHS` gained `netlify.toml` and `nginx.conf` (Conflict #12's closed
+table); `pr_body.py` gained a `security-headers` limitations entry (CSP is a
+conservative default; merged ≠ redeployed). 517 backend tests green (8 new; one
+existing test that used `netlify.toml` as its "disallowed path" example now uses
+`Caddyfile`). Offline only — not live-verified against a real Netlify/nginx repo.
 
 ---
 

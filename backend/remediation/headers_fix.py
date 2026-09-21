@@ -2,8 +2,8 @@
 PLAN-v5 Stage D, the only Fixer whose finding never carries a `file_path`
 (a header finding came from observing a live site, not a repository). It
 only ever runs once a URL scan has been linked to a repository
-(`remediation/linking.py`), and only against the two stacks Stage D scoped
-in: Vercel (`vercel.json`) and Next.js (`next.config.*`).
+(`remediation/linking.py`), and only against Vercel (`vercel.json`), Netlify
+(`netlify.toml`), nginx (`nginx.conf`) and Next.js (`next.config.*`).
 
 Tier 2 (review-required): a header value this fixer writes is a reasonable
 default, not a value the site's own maintainer chose, so a human should
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from datetime import datetime, timezone
 
 from models import Finding, FixPlan
@@ -49,6 +50,9 @@ _ALL_HEADERS = list(_HEADER_BY_FINDING.values())
 
 _VERCEL_SOURCE = "/(.*)"
 
+_NGINX_SERVER_RE = re.compile(r"^\s*server\s*\{")
+_NGINX_ADD_HEADER_RE = re.compile(r"^\s*add_header\s+([\w-]+)", re.MULTILINE)
+
 _NEXT_EXPORT_OBJECT_RE = re.compile(
     r"^(module\.exports\s*=\s*\{|export\s+default\s*\{|const\s+\w+(?:\s*:\s*\w+)?\s*=\s*\{)"
 )
@@ -68,6 +72,10 @@ class SecurityHeaderFixer(Fixer):
 
         if stack.kind == StackKind.VERCEL:
             patch = self._plan_vercel(stack)
+        elif stack.kind == StackKind.NETLIFY:
+            patch = self._plan_netlify(stack)
+        elif stack.kind == StackKind.NGINX:
+            patch = self._plan_nginx(stack)
         else:
             patch = self._plan_next(stack)
 
@@ -119,6 +127,50 @@ class SecurityHeaderFixer(Fixer):
             return None  # every header this fixer knows about is already there
 
         new_content = json.dumps(data, indent=2) + "\n"
+        return make_patch(stack.path, "modify", stack.existing, new_content)
+
+    def _plan_netlify(self, stack: StackResult):
+        assert stack.existing is not None
+        try:
+            data = tomllib.loads(stack.existing.content)
+        except tomllib.TOMLDecodeError:
+            return None  # malformed TOML -- not safe to append to
+
+        already = set()
+        for block in data.get("headers", []) if isinstance(data.get("headers"), list) else []:
+            values = block.get("values") if isinstance(block, dict) else None
+            if isinstance(values, dict):
+                already.update(k.lower() for k in values)
+
+        missing = [(k, v) for k, v in _ALL_HEADERS if k.lower() not in already]
+        if not missing:
+            return None
+
+        # Appending a fresh [[headers]] table is valid TOML wherever the
+        # file currently ends, and Netlify merges every matching block.
+        content = stack.existing.content
+        if content and not content.endswith("\n"):
+            content += "\n"
+        block = '\n[[headers]]\n  for = "/*"\n  [headers.values]\n'
+        block += "".join(f'    {k} = "{v}"\n' for k, v in missing)
+        return make_patch(stack.path, "modify", stack.existing, content + block)
+
+    def _plan_nginx(self, stack: StackResult):
+        assert stack.existing is not None
+        content = stack.existing.content
+        already = {m.lower() for m in _NGINX_ADD_HEADER_RE.findall(content)}
+        missing = [(k, v) for k, v in _ALL_HEADERS if k.lower() not in already]
+        if not missing:
+            return None
+
+        lines = content.splitlines(keepends=True)
+        server_at = next((i for i, ln in enumerate(lines) if _NGINX_SERVER_RE.match(ln)), None)
+        if server_at is None:
+            return None  # no server block to put directives in -- decline
+
+        indent = re.match(r"\s*", lines[server_at]).group(0) + "    "
+        added = [f'{indent}add_header {k} "{v}" always;\n' for k, v in missing]
+        new_content = "".join(lines[: server_at + 1] + added + lines[server_at + 1 :])
         return make_patch(stack.path, "modify", stack.existing, new_content)
 
     def _plan_next(self, stack: StackResult):

@@ -22,6 +22,15 @@ from models import Finding, FixPlan
 # A fixer with no entry here still gets the generic caveat below — silence is
 # never read as "nothing left to do".
 _LIMITATIONS: dict[str, list[str]] = {
+    "security-headers": [
+        "The header values are conservative defaults (for example a strict "
+        "`default-src 'self'` CSP), not values tuned to your site — review them, "
+        "especially the CSP, before merging, since a too-strict policy can break pages.",
+        "In nginx, an `add_header` inside a `location` block replaces the ones set at "
+        "`server` level for that location — check any location blocks you have.",
+        "Merging changes the file; it does not prove the site has been redeployed "
+        "with it. Re-scan the live URL after your deploy.",
+    ],
     "ci-unpinned-action": [
         "Only the actions flagged by this scan are pinned. Other workflows, and "
         "actions added later, still need pinning.",

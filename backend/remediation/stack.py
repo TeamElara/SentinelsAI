@@ -2,9 +2,10 @@
 `remediation/headers_fix.py`'s `SecurityHeaderFixer` needs before it can
 decide *where* a missing security header should be added (PLAN-v5 Stage D).
 
-Scoped to exactly two targets, per the stage's own scope decision: Vercel
-(`vercel.json`) and Next.js (`next.config.{js,ts,mjs}`). Anything else comes
-back as `None` -- an honest "I don't recognize this stack", never a guess.
+Scoped to Vercel (`vercel.json`), Netlify (`netlify.toml`), nginx
+(`nginx.conf` at the repo root) and Next.js (`next.config.{js,ts,mjs}`).
+Anything else comes back as `None` -- an honest "I don't recognize this
+stack", never a guess.
 """
 from __future__ import annotations
 
@@ -23,10 +24,14 @@ NEXT_CONFIG_CANDIDATES: tuple[str, ...] = (
     "next.config.mjs",
 )
 VERCEL_CONFIG_PATH = "vercel.json"
+NETLIFY_CONFIG_PATH = "netlify.toml"
+NGINX_CONFIG_PATH = "nginx.conf"
 
 
 class StackKind(str, Enum):
     VERCEL = "vercel"
+    NETLIFY = "netlify"
+    NGINX = "nginx"
     NEXTJS = "nextjs"
 
 
@@ -48,6 +53,16 @@ async def detect_stack(files: FileSource) -> StackResult | None:
     vercel = await files.get(VERCEL_CONFIG_PATH)
     if vercel is not None:
         return StackResult(kind=StackKind.VERCEL, path=VERCEL_CONFIG_PATH, existing=vercel)
+
+    # Same edge-layer reasoning as Vercel above: a Netlify or nginx config
+    # sets the header before any framework config gets a say.
+    netlify = await files.get(NETLIFY_CONFIG_PATH)
+    if netlify is not None:
+        return StackResult(kind=StackKind.NETLIFY, path=NETLIFY_CONFIG_PATH, existing=netlify)
+
+    nginx = await files.get(NGINX_CONFIG_PATH)
+    if nginx is not None:
+        return StackResult(kind=StackKind.NGINX, path=NGINX_CONFIG_PATH, existing=nginx)
 
     for candidate in NEXT_CONFIG_CANDIDATES:
         found = await files.get(candidate)

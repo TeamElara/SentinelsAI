@@ -45,7 +45,10 @@ DELETE_ALLOWLIST: frozenset[str] = frozenset({
 # table; it only applies to the no-`file_path` branch below.
 LINK_REPO_FIXER_PATHS: dict[str, frozenset[str]] = {
     "security-headers": frozenset(
-        {"next.config.js", "next.config.ts", "next.config.mjs", "vercel.json"}
+        {
+            "next.config.js", "next.config.ts", "next.config.mjs",
+            "vercel.json", "netlify.toml", "nginx.conf",
+        }
     ),
 }
 

@@ -75,3 +75,19 @@ async def test_returns_none_for_an_unrecognized_stack(mock_site):
 async def test_returns_none_when_nothing_exists_at_all(mock_site):
     result = await detect_stack(_files({}, mock_site))
     assert result is None
+
+
+async def test_detects_netlify_and_nginx_ahead_of_next(mock_site):
+    from remediation.stack import StackKind, detect_stack
+    from tests.test_remediation_headers_fix import _contents_response, _files
+
+    routes = {
+        "/repos/octo/demo/contents/netlify.toml": _contents_response("n", "[build]\n"),
+        "/repos/octo/demo/contents/next.config.js": _contents_response("x", "module.exports = {}\n"),
+    }
+    assert (await detect_stack(_files(routes, mock_site))).kind == StackKind.NETLIFY
+    routes = {
+        "/repos/octo/demo/contents/nginx.conf": _contents_response("g", "server {}\n"),
+        "/repos/octo/demo/contents/next.config.js": _contents_response("x", "module.exports = {}\n"),
+    }
+    assert (await detect_stack(_files(routes, mock_site))).kind == StackKind.NGINX

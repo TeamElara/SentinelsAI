@@ -173,7 +173,7 @@ def test_validate_plan_accepts_security_headers_modify_at_an_allowed_path():
 def test_validate_plan_rejects_security_headers_modify_outside_allowed_paths():
     finding = _finding(id="missing-hsts", file_path=None, line=None)
     patch = make_patch(
-        "netlify.toml", "modify", SourceFile(path="netlify.toml", content="", sha="s"), "y"
+        "Caddyfile", "modify", SourceFile(path="Caddyfile", content="", sha="s"), "y"
     )
     with pytest.raises(PlanValidationError, match="may only touch"):
         validate_plan(

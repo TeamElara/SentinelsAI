@@ -147,3 +147,84 @@ async def test_next_declines_when_no_export_anchor_found(mock_site):
     routes = {"/repos/octo/demo/contents/next.config.ts": _contents_response("n1", existing)}
     plan = await SecurityHeaderFixer().plan(_finding("missing-csp"), _files(routes, mock_site))
     assert plan is None
+
+
+# --- Netlify ------------------------------------------------------------------
+
+
+async def test_netlify_appends_a_headers_block(mock_site):
+    routes = {"/repos/octo/demo/contents/netlify.toml": _contents_response("n1", '[build]\n  command = "npm run build"\n')}
+    plan = await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site))
+    assert plan is not None
+    patch = plan.patches[0]
+    assert patch.path == "netlify.toml" and patch.action == "modify"
+    import tomllib
+    data = tomllib.loads(patch.new_content)
+    assert data["build"]["command"] == "npm run build"
+    assert data["headers"][0]["for"] == "/*"
+    assert data["headers"][0]["values"]["Strict-Transport-Security"].startswith("max-age=")
+    assert len(data["headers"][0]["values"]) == 4
+
+
+async def test_netlify_only_adds_missing_headers(mock_site):
+    existing = '[[headers]]\n  for = "/*"\n  [headers.values]\n    x-frame-options = "SAMEORIGIN"\n'
+    routes = {"/repos/octo/demo/contents/netlify.toml": _contents_response("n1", existing)}
+    plan = await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site))
+    import tomllib
+    data = tomllib.loads(plan.patches[0].new_content)
+    assert len(data["headers"]) == 2
+    assert "X-Frame-Options" not in data["headers"][1]["values"]
+    assert len(data["headers"][1]["values"]) == 3
+
+
+async def test_netlify_declines_when_everything_is_already_set(mock_site):
+    existing = (
+        '[[headers]]\n  for = "/*"\n  [headers.values]\n'
+        '    Content-Security-Policy = "x"\n    Strict-Transport-Security = "x"\n'
+        '    X-Content-Type-Options = "x"\n    X-Frame-Options = "x"\n'
+    )
+    routes = {"/repos/octo/demo/contents/netlify.toml": _contents_response("n1", existing)}
+    assert await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site)) is None
+
+
+async def test_netlify_declines_malformed_toml(mock_site):
+    routes = {"/repos/octo/demo/contents/netlify.toml": _contents_response("n1", "[build\nbroken")}
+    assert await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site)) is None
+
+
+# --- nginx --------------------------------------------------------------------
+
+_NGINX = "http {\n    server {\n        listen 80;\n        location / { root /app; }\n    }\n}\n"
+
+
+async def test_nginx_inserts_add_header_after_server_open(mock_site):
+    routes = {"/repos/octo/demo/contents/nginx.conf": _contents_response("g1", _NGINX)}
+    plan = await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site))
+    assert plan is not None
+    new = plan.patches[0].new_content
+    lines = new.splitlines()
+    i = lines.index("    server {")
+    assert lines[i + 1] == '        add_header Content-Security-Policy "default-src \'self\'" always;'
+    assert new.count("add_header") == 4
+    assert "listen 80;" in new
+
+
+async def test_nginx_skips_headers_already_present(mock_site):
+    conf = _NGINX.replace("listen 80;", 'listen 80;\n        add_header X-Frame-Options "DENY";')
+    routes = {"/repos/octo/demo/contents/nginx.conf": _contents_response("g1", conf)}
+    plan = await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site))
+    assert plan.patches[0].new_content.count("add_header X-Frame-Options") == 1
+    assert plan.patches[0].new_content.count("add_header") == 4
+
+
+async def test_nginx_declines_without_a_server_block(mock_site):
+    routes = {"/repos/octo/demo/contents/nginx.conf": _contents_response("g1", "events {}\n")}
+    assert await SecurityHeaderFixer().plan(_finding(), _files(routes, mock_site)) is None
+
+
+async def test_netlify_plan_passes_validate_plan(mock_site):
+    from remediation.patch import validate_plan
+    routes = {"/repos/octo/demo/contents/netlify.toml": _contents_response("n1", "[build]\n")}
+    finding = _finding()
+    plan = await SecurityHeaderFixer().plan(finding, _files(routes, mock_site))
+    validate_plan(finding, plan)
