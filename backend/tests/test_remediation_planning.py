@@ -112,7 +112,7 @@ async def test_preview_plan_returns_none_for_unknown_finding_key(monkeypatch):
     assert plan is None
 
 
-async def test_preview_plan_raises_not_a_repo_scan_for_url_scans():
+async def test_preview_plan_raises_not_a_repo_scan_for_url_scans(temp_db):
     report = _report([_GITIGNORE_FINDING], target_type="url", url="https://example.com")
     with pytest.raises(NotARepoScan):
         await preview_plan(report, "gitignore-present")
@@ -147,7 +147,7 @@ async def test_preview_plan_for_a_linked_url_scan_reads_the_linked_repo(monkeypa
     assert plan.patches[0].path == "vercel.json"
 
 
-async def test_preview_plan_for_an_unlinked_url_scan_still_refuses(monkeypatch):
+async def test_preview_plan_for_an_unlinked_url_scan_still_refuses(monkeypatch, temp_db):
     finding = Finding(
         id="missing-hsts", title="t", category="Headers",
         severity=Severity.HIGH, status=Status.FAIL, agent="headers",
