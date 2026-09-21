@@ -24,6 +24,15 @@ _EXACT_TIER: dict[str, int] = {
     "gitignore-present": 1,
     "repo-readme-present": 1,
     "repo-env-example-present": 1,
+    # Phase 1: a Fixer now exists for both (LicenseFixer, CiScaffoldFixer,
+    # remediation/scaffolding.py) that only ever materializes a choice the
+    # repo already made for itself -- a declared SPDX license id, or the
+    # existing npm scripts a package.json already defines -- never a guess
+    # of its own, so tier 1 (not the review-required tier 2 a fixer that
+    # picks its own default gets) is correct, same reasoning as
+    # `repo-readme-present`/`repo-env-example-present` above.
+    "repo-license-present": 1,
+    "repo-ci-configured": 1,
     # PLAN-v5 Stage D: corrected from the unlisted default (tier 4) once a
     # Fixer (`remediation/headers_fix.py`) actually exists for these --
     # review-required, since a header value this fixer writes is a

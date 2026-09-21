@@ -13,11 +13,26 @@ from remediation.budget import MAX_FILES_PER_PR
 from remediation.source import SourceFile
 from remediation.tiers import PLANNABLE_TIERS, tier_for
 
-# No fixer deletes anything in Stage A -- this stays empty until Stage E's
-# secret-removal fixer adds specific paths. Deliberately not a wildcard: an
-# empty allowlist means "delete is currently never permitted," which is the
-# safe default while nothing needs the capability yet.
-DELETE_ALLOWLIST: frozenset[str] = frozenset()
+# Phase 1's secret-removal fixer (`remediation/secrets.py`) adds the first
+# real entries here. Deliberately a small, closed set of *exact* root-level
+# filenames, not a wildcard or a pattern: this is checked with plain `in`
+# membership on the patch's full repo-relative path (see `validate_plan`
+# below, which this table cannot influence the logic of -- only its
+# contents), so a nested path like "backend/.env" can never match no matter
+# how the string is spelled. That is a deliberate limit, not an oversight --
+# `SecretEnvCommittedFixer` declines for anything not listed here rather than
+# guessing that a nested path is just as safe to delete as these canonical
+# ones. Names match the same shapes `GitignoreFixer`'s baseline template and
+# `agents/repo/secrets.py`'s `_ENV_SHAPED_RE` already treat as "obviously a
+# dotenv file", not an exhaustive list of every possible `.env.*` suffix.
+DELETE_ALLOWLIST: frozenset[str] = frozenset({
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.production",
+    ".env.staging",
+    ".env.test",
+})
 
 # PLAN-v5 Stage D, conflict #12: a header finding (`agents/headers.py`) has
 # no `file_path` -- it came from observing a live site, not a repository --

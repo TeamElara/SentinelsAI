@@ -50,6 +50,44 @@ _LIMITATIONS: dict[str, list[str]] = {
         "Anything the container does before this line still runs as root, including "
         "every earlier build step.",
     ],
+    "docker-latest-tag": [
+        "This pins today's resolution of `:latest` by digest. It does not switch you "
+        "to a real version tag, and it does not subscribe you to that image's future "
+        "security fixes -- re-resolve deliberately when you want a newer build.",
+        "Only Docker Hub images were resolved. A base image from another registry "
+        "would not have produced this fix.",
+    ],
+    "secret-env-committed": [
+        "**This does not resolve the leak.** Deleting the file removes it from the "
+        "working tree only -- it is still recoverable from this repository's git "
+        "history by anyone who has (or ever had) read access. Rotate every credential "
+        "this file contained now; that is not optional and this PR does not do it "
+        "for you.",
+        "If `.gitignore` does not already exclude this path, add a rule for it "
+        "yourself -- otherwise the same file (or a new version of it) can be "
+        "committed again. This fixer does not edit `.gitignore`.",
+    ],
+    "ci-pull-request-target": [
+        "This only ran because the workflow showed no sign of checking out the pull "
+        "request's own head (no `pull_request.head.*` / `github.head_ref` reference "
+        "anywhere in the file) -- the one pattern that turns `pull_request_target` "
+        "into a real risk. If that reasoning is wrong for this workflow, say so in "
+        "review; this is a text-pattern check, not a full analysis of what the "
+        "workflow (or anything it calls) actually does.",
+        "If this workflow relied on `pull_request_target`'s elevated permissions or "
+        "secret access on purpose (for example, to comment on a fork's pull request), "
+        "switching to `pull_request` removes that access and may break it.",
+    ],
+    "repo-license-present": [
+        "The license text was chosen from a license id your own `package.json` or "
+        "`pyproject.toml` already declared -- Sentinels did not pick a license for "
+        "you. Confirm it says what you intended before merging.",
+    ],
+    "repo-ci-configured": [
+        "This is a minimal starting workflow, not a full CI setup. It only runs the "
+        "npm scripts (`lint`/`test`/`build`) your `package.json` already defines, and "
+        "nothing else in your project's actual test/build process.",
+    ],
 }
 
 _GENERIC_LIMITATION = (

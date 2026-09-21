@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from models import Finding, Severity, Status
-from remediation.dockerfile import DockerRootUserFixer
+from remediation.dockerfile import DockerLatestTagFixer, DockerRootUserFixer
 from remediation.gitignore import GitignoreFixer
 from remediation.registry import fixable_findings, fixer_for
-from remediation.scaffolding import EnvExampleFixer, ReadmeFixer
-from remediation.workflows import WorkflowPinFixer
+from remediation.scaffolding import CiScaffoldFixer, EnvExampleFixer, LicenseFixer, ReadmeFixer
+from remediation.secrets import SecretEnvCommittedFixer
+from remediation.workflows import PullRequestTargetFixer, WorkflowPinFixer
 
 
 def _finding(finding_id: str, status: Status = Status.WARN, agent: str = "") -> Finding:
@@ -21,6 +22,11 @@ def test_fixer_for_dispatches_each_known_id_to_the_right_fixer():
     assert isinstance(fixer_for(_finding("repo-readme-present")), ReadmeFixer)
     assert isinstance(fixer_for(_finding("repo-env-example-present")), EnvExampleFixer)
     assert isinstance(fixer_for(_finding("docker-root-user-Dockerfile")), DockerRootUserFixer)
+    assert isinstance(fixer_for(_finding("docker-latest-tag-Dockerfile-L1")), DockerLatestTagFixer)
+    assert isinstance(fixer_for(_finding("secret-env-committed-dot-env")), SecretEnvCommittedFixer)
+    assert isinstance(fixer_for(_finding("ci-pull-request-target-ci-yml")), PullRequestTargetFixer)
+    assert isinstance(fixer_for(_finding("repo-license-present")), LicenseFixer)
+    assert isinstance(fixer_for(_finding("repo-ci-configured")), CiScaffoldFixer)
 
 
 def test_fixer_for_returns_none_for_unrecognized_finding():

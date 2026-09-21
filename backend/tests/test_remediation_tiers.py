@@ -24,6 +24,8 @@ def _finding(finding_id: str, confidence: float | None = None) -> Finding:
         ("gitignore-present", 1),
         ("repo-readme-present", 1),
         ("repo-env-example-present", 1),
+        ("repo-license-present", 1),
+        ("repo-ci-configured", 1),
         ("ci-unpinned-action-workflow-yml-L12", 1),
         ("docker-root-user-Dockerfile", 2),
         ("dependency-lodash-cve-1234", 2),

@@ -8,11 +8,12 @@ from __future__ import annotations
 from models import Finding, Status
 from remediation.base import Fixer
 from remediation.dependencies import DependencyVersionFixer
-from remediation.dockerfile import DockerRootUserFixer
+from remediation.dockerfile import DockerLatestTagFixer, DockerRootUserFixer
 from remediation.gitignore import GitignoreFixer
 from remediation.headers_fix import SecurityHeaderFixer
-from remediation.scaffolding import EnvExampleFixer, ReadmeFixer
-from remediation.workflows import WorkflowPinFixer
+from remediation.scaffolding import CiScaffoldFixer, EnvExampleFixer, LicenseFixer, ReadmeFixer
+from remediation.secrets import SecretEnvCommittedFixer
+from remediation.workflows import PullRequestTargetFixer, WorkflowPinFixer
 
 FIXERS: list[Fixer] = [
     WorkflowPinFixer(),
@@ -22,6 +23,11 @@ FIXERS: list[Fixer] = [
     DockerRootUserFixer(),
     SecurityHeaderFixer(),
     DependencyVersionFixer(),
+    DockerLatestTagFixer(),
+    SecretEnvCommittedFixer(),
+    PullRequestTargetFixer(),
+    LicenseFixer(),
+    CiScaffoldFixer(),
 ]
 
 

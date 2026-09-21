@@ -83,6 +83,19 @@ def test_gitignore_body_says_it_does_not_erase_history():
     assert "rotated" in body
 
 
+def test_secret_env_committed_body_says_rotate_and_not_erased_from_history():
+    """Rule 9's most explicitly-named instance: deleting a committed secret
+    must never be read as "the leak is resolved"."""
+    body = pull_request_body(
+        SCAN_ID, [(_finding("secret-env-committed-dot-env", "Committed .env file"),
+                   _plan("secret-env-committed-dot-env", "secret-env-committed", tier=2))]
+    )
+    assert "does not resolve the leak" in body
+    assert "git history" in body
+    assert "Rotate every credential" in body
+    assert ".gitignore" in body
+
+
 def test_env_example_body_says_no_value_was_copied_and_nothing_was_rotated():
     body = pull_request_body(
         SCAN_ID, [(_finding("repo-env-example-present", "No .env.example"),
