@@ -68,7 +68,7 @@ from auth.session import (  # noqa: E402
     token_from_cookie,
 )
 from db import init_db  # noqa: E402
-from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
+from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from rate_limit import enforce_scan_rate_limit  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
@@ -84,7 +84,7 @@ from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
 from storage.installations import list_installations, revoke_installation, save_installation  # noqa: E402
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
-from storage.remediation import list_audit, list_audit_for_user  # noqa: E402
+from storage.remediation import list_audit, list_audit_for_user, list_fix_applications  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
 from storage.scans import delete_scan, get_scan, list_scans, scan_owner, update_checklist_item  # noqa: E402
 from storage.users import delete_session, sign_in  # noqa: E402
@@ -749,7 +749,20 @@ def scan_fix_summary(scan_id: str, user: User = Depends(current_user)) -> FixSum
     if report is None:
         raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
 
-    candidates = fixable_findings(report.findings)
+    # The scan itself is immutable (conflict #6), so "still needs a fix" has to
+    # subtract what fix_applications says is already handled: merged, or
+    # verified with the target actually fixed. A verified fix that did NOT
+    # work stays counted -- it is still a problem.
+    handled = {
+        app.finding_key
+        for app in list_fix_applications(scan_id)
+        if app.state == FixApplicationState.MERGED
+        or (
+            app.state == FixApplicationState.VERIFIED
+            and (app.verification is None or app.verification.target_fixed)
+        )
+    }
+    candidates = [f for f in fixable_findings(report.findings) if f.id not in handled]
     first = candidates[0] if candidates else None
     return FixSummary(
         fixable_count=len(candidates),

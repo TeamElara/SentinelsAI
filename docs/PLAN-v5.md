@@ -1024,6 +1024,26 @@ Pushed to `origin/main` at `108b562`.
 
 ---
 
+## Stage H — Phase 2: the Autofix badge stops counting handled fixes
+
+**Done, 2026-09-21.** Closes the gap recorded in the 2026-08-13 entry: `GET
+/scans/{id}/fix/summary` counted against the scan's frozen findings only, so the
+badge still read the original number after fixes merged. It now subtracts findings
+whose `fix_applications` row is `merged`, or `verified` with `target_fixed` true. An
+open PR still counts (not fixed yet), and a verified fix that did *not* work still
+counts. The scan itself stays immutable (conflict #6). 509 backend tests green (3 new,
+`test_main_fix_summary.py`). Also on this date: two `test_remediation_planning.py`
+tests were missing `temp_db` and failed on a fresh clone, and CI now installs
+`requirements-dev.txt` so pytest exists.
+
+**Still open from the original "Phase 2" question:** live-verifying the Stage F/G
+fixers. A read-only run against `arihantjaino7/some-action-v1` confirmed the README
+fixer plans live and the license/env-example fixers decline correctly; NodeGoat's
+lockfile-only dependency findings all declined, as designed. The remaining fixers need a
+purpose-built fixture repo plus the GitHub App key, which only the developer has.
+
+---
+
 ## What only the developer can do
 
 Register the GitHub App (github.com/settings/apps): name "Sentinels Autofix", callback
