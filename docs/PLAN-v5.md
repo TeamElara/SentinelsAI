@@ -288,6 +288,23 @@
 
 ---
 
+## Working across machines and people
+
+Multiple people, on multiple laptops, work on this repo. `origin/main` is the only
+shared state between them — not any one machine's working tree. So:
+
+- **End every phase/stage with a commit and a push to `origin/main`**, from whichever
+  laptop did the work, before ending that session. Uncommitted or unpushed work is
+  invisible to everyone else and to the next session on any machine, including your own.
+- **Starting a new session on any laptop, first check whether the previous phase
+  actually made it to `origin/main`** (`git fetch && git status`, `git log
+  origin/main..HEAD` and `git log HEAD..origin/main`). If local work is ahead of
+  `origin/main` and unpushed, or this checkout is behind it, say so plainly before
+  doing anything else — never silently start new work on top of an unknown base.
+- This file (`docs/PLAN-v5.md`) is the one that should be extracted from GitHub to
+  pick the project back up elsewhere: it carries the full stage-by-stage history,
+  what shipped in each, and what's still deferred.
+
 ## The problem
 
 Sentinels ends at advice. A finding goes to Groq and comes back as six paragraphs of
@@ -315,13 +332,19 @@ extended to remediation. See CLAUDE.md's remediation non-negotiable for all ten 
 
 | Tier | Meaning | UI reads | Examples |
 |---|---|---|---|
-| 1 | Deterministic, safe to PR | **Fix available** | `ci-unpinned-action-*`, `gitignore-present`, `repo-readme-present`, `repo-env-example-present` |
+| 1 | Deterministic, safe to PR | **Fix available** | `ci-unpinned-action-*`, `gitignore-present`, `repo-readme-present`, `repo-env-example-present`, `repo-license-present`, `repo-ci-configured` |
 | 2 | Generated, human must check | **Review required** | `docker-root-user-*`, `dependency-*`, `docker-latest-tag-*`, `secret-env-committed-*`, `ci-pull-request-target-*`, `api-cors-permissive`, `sensitive-response-cacheable`, `server-version-disclosed`, `risky-http-methods` |
 | 3 | We can say exactly what to do, we cannot do it | **Manual action required** | `spf-record`, `dmarc-record`, `tls-*`, `dir-listing`, `env-file-exposed`, `git-directory-exposed`, `backup-file-exposed`, `setup-page-exposed` |
 | 4 | Never auto-fix | **Suggestion only** | `pattern-*`, `subdomain-takeover-potential`, `subdomain-dangling-dns`, `*-scan-partial`, anything with `confidence` set |
 
-`LICENSE` is deliberately **not** auto-generated. Choosing a software license is a legal
-decision, not a security fix.
+**Choosing a software license is still never Sentinels' decision to make** — that part
+stays a legal call for the repo's own maintainer, not a security fix. Stage G's
+`LicenseFixer` (`repo-license-present`, tier 1) only ever *materializes* a choice the
+repo already declared in its own manifest (`package.json`/`pyproject.toml`), and refuses
+to run at all when no license is already declared there. This replaces the blanket "not
+auto-generated" line this section originally had — the part of the spec that conflict
+revised, per this file's own rule that implementation reality updates the doc rather
+than being silently routed around.
 
 ---
 
@@ -916,9 +939,12 @@ Stage D/E's real-account passes.
 
 ## Deferred beyond Stage F — not scoped yet
 
-- `remediation/secrets.py` (working name) — a Tier 2 fixer for `secret-env-committed-*`,
+- ~~`remediation/secrets.py` (working name) — a Tier 2 fixer for `secret-env-committed-*`,
   plausibly gitignore-shaped (similar to `GitignoreFixer`) but touching a committed
-  secret, so it needs its own read of CLAUDE.md's remediation rule 9 before it's built.
+  secret, so it needs its own read of CLAUDE.md's remediation rule 9 before it's
+  built.~~ — **done, 2026-09-21, as part of Stage G.** Built exactly as
+  `remediation/secrets.py`, delete-only, gated by a small allowlist extension. See
+  "Stage G" below.
 - `netlify.toml` / `nginx.conf` header fixers — extends `remediation/stack.py` and
   `remediation/headers_fix.py`'s `SecurityHeaderFixer` to the two stacks Stage D
   scoped out.
@@ -937,6 +963,64 @@ note and does not belong on any future one either, per the correction above.
 
 The registry and tier table are *designed for* the fixers above; they are not
 implemented. Three working fixers beat twenty half-working ones.
+
+---
+
+## Stage G — Phase 1: closing the deterministic autofix coverage gap
+
+**Scoped and built 2026-09-21.** Six finding types had a registered Fixer going into
+this stage; three more (`docker-latest-tag-*`, `secret-env-committed-*`,
+`ci-pull-request-target-*`) already had a tier assigned in `tiers.py` but no Fixer at
+all. This stage closes that gap and adds two more (`repo-license-present`,
+`repo-ci-configured`, previously unlisted and defaulting to tier 4), taking the total
+to eleven. No LLM involved anywhere — plain Python, same as every stage before it.
+
+- **`DockerLatestTagFixer`** (`remediation/dockerfile.py`, tier 2) — same shape as
+  `WorkflowPinFixer`'s split (conflict #3): a pure line-rewrite (`rewrite_from_line`)
+  plus a network resolver (`resolve_latest_digest`), mocked in tests. Resolves a
+  floating `:latest`/untagged `FROM` to its current digest against Docker Hub's
+  registry API only (anonymous token, then a manifest `GET` reading
+  `Docker-Content-Digest`) — a base image on any other registry declines rather than
+  guessing at an API this project has never verified against.
+- **`SecretEnvCommittedFixer`** (`remediation/secrets.py`, new file, tier 2) —
+  delete-only. `validate_plan`'s path-containment rule (a plan for a finding with a
+  `file_path` may only touch that one path) means it structurally cannot also add a
+  `.gitignore` rule in the same plan, so it doesn't try — that caveat, and the rule-9
+  rotate/history warning, live in the PR body (`pr_body.py`'s `_LIMITATIONS` table)
+  instead. Gated by a small extension to `DELETE_ALLOWLIST` (`patch.py`) covering only
+  canonical root-level `.env`-shaped names — a nested path (`backend/.env`) declines,
+  since a static exact-match allowlist can't safely generalize to an arbitrary path.
+- **`PullRequestTargetFixer`** (`remediation/workflows.py`, tier 2) — swapping
+  `pull_request_target` for `pull_request` is a real behavior change (it drops write
+  permissions/secret access a workflow may depend on), so this only rewrites the
+  trigger when the file shows no sign anywhere of checking out the fork's own head
+  (`pull_request.head.*`, `github.head_ref`) and no plain `pull_request` trigger
+  already exists. Anything else declines — a text-pattern check, not a guarantee about
+  what the workflow (or anything it calls) actually does.
+- **`LicenseFixer`** (`remediation/scaffolding.py`, tier 1) — see the revised
+  "Fixability tiers" note above. Only reads an SPDX id the repo already declared in
+  `package.json`/`pyproject.toml` (parsed with stdlib `tomllib`, no new dependency);
+  only writes verbatim canonical text for a small set it's confident in (MIT, ISC,
+  BSD-2-Clause, BSD-3-Clause) — an unrecognized id declines rather than paraphrasing a
+  legal document.
+- **`CiScaffoldFixer`** (`remediation/scaffolding.py`, tier 1) — reuses
+  `remediation/stack.py`'s existing Vercel/Next.js detection rather than building a
+  second one, so it only ever scaffolds an npm-based workflow, and only wires in the
+  `lint`/`test`/`build` scripts the repo's own `package.json` actually defines. No
+  recognized stack → decline, the same precedent `headers_fix.py` already set.
+
+**Also:** `DELETE_ALLOWLIST` extended (`patch.py`), `repo-license-present` and
+`repo-ci-configured` added to `tiers.py` at tier 1, all five registered in
+`registry.py`'s `FIXERS`, and a `_LIMITATIONS` entry added per new fixer slug in
+`pr_body.py`. `validate_plan()` itself was not touched.
+
+**Done, 2026-09-21.** 506 backend tests green (54 new, `test_remediation_secrets.py` +
+additions to `test_remediation_dockerfile.py`/`workflows.py`/`scaffolding.py`/
+`registry.py`/`tiers.py`/`pr_body.py`), plus a direct offline check that all five
+fixers' plans pass the real, unmodified `validate_plan()` end to end. Not yet
+live-verified against a real repo (a real Docker Hub image, a real declared-license
+manifest, a real `pull_request_target` workflow) — offline/mocked only for this stage.
+Pushed to `origin/main` at `108b562`.
 
 ---
 
