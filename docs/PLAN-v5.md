@@ -1067,7 +1067,104 @@ existing test that used `netlify.toml` as its "disallowed path" example now uses
 
 ---
 
-## What only the developer can do
+## Stage J — Live-verifying Stage G/I against real GitHub content
+
+**Done, 2026-09-22.** Closes the "still open" gap Stage H recorded and the "offline
+only" caveat Stage I recorded, for five of the seven fixers built in those stages.
+Ran on the developer's own machine, the only one with the GitHub App key.
+
+**Fixtures.** Two throwaway repos, built and pushed via `gh api` (not through
+Sentinels itself — this is test setup, not the product's own write path):
+
+- `arihantjaino7/some-action-v1` (existing, reused, public) — `Dockerfile` floated to
+  `FROM python:latest`, a root `.env` with dummy values, a new
+  `.github/workflows/label-sync.yml` with a bare `pull_request_target` trigger, and a
+  root `nginx.conf` with an empty `server {}` block.
+- `arihantjaino7/sentinels-fixture-web` (new, public — flipped from private once the
+  scanner turned out to have no authenticated path, so private stayed unreachable) —
+  a `package.json` declaring `"license": "MIT"` and `lint`/`test`/`build` scripts, no
+  `LICENSE`, no CI workflow, and a `netlify.toml` with a `[build]` block and no
+  `[[headers]]`. `CiScaffoldFixer` and `LicenseFixer` can't share a fixture with
+  `PullRequestTargetFixer` (one needs no CI workflow present, the other needs one) or
+  `SecurityHeaderFixer`'s netlify and nginx paths (stack detection is first-match —
+  netlify shadows nginx), which is why this took two repos instead of one.
+
+**GitHub App.** `backend/.env`'s five App variables were all populated but pointed at
+a private key file that didn't exist; the actual `.pem` was sitting in `~/Downloads`
+under a different filename (`sentinels-web...`, not `sentinels-local-dev...`) and
+never got moved to the configured path. Moved it, confirmed it's a valid 2048-bit RSA
+key, and confirmed the whole chain live: `app_jwt()` signed against `GET /app` came
+back 200 as App **Sentinels-Web** (slug `sentinels-web`, id `5017221`, owner org
+**TeamElara**) — a different name than "Sentinels Autofix" in the section below,
+which is stale. `GET /app/installations` came back empty, matching the empty local
+table exactly.
+
+**Installing it live surfaced two real bugs, not fixture problems:**
+
+1. `install_url()` sends `state` correctly, but GitHub only round-trips it through
+   the Setup URL on a genuine *install* screen — installing over an *existing*
+   installation shows a *configure* screen instead, which drops `state` on
+   redirect, and the callback correctly rejects the result as `state_mismatch`.
+   Workaround used here: `DELETE /app/installations/{id}` via the App JWT before
+   each real attempt, so GitHub always shows a fresh Install screen. Not a code fix
+   — a real gap between how this callback assumes GitHub behaves and how it
+   actually behaves on a re-install, worth its own finding eventually.
+2. The App's **Setup URL** was never configured (or pointed at the wrong place), so
+   GitHub fell back to delivering the installation redirect to the *sign-in*
+   callback (`/auth/github/callback`) instead of the *install* callback
+   (`/auth/github/install/callback`) — confirmed by instrumenting a throwaway copy
+   of the FastAPI app to log the `Cookie` header and `state` query param on every
+   `/auth/*` request (`sentinels_install_state` cookie and `state` param matched
+   exactly, just delivered to the wrong route). Fixed by setting the Setup URL to
+   `http://localhost:8000/auth/github/install/callback` with "Redirect on update"
+   on, on the org-owned app's settings page
+   (`github.com/organizations/TeamElara/settings/apps/sentinels-web` — the
+   personal-account URL 404s for an org-owned app). Also: **port 8000**, not the
+   **8011** this file's "What only the developer can do" section below names — that
+   section predates this app registration and is stale on that detail too.
+
+Once installed, `github_installations` holds one live row: installation
+`163551599`, `contents`/`pull_requests`/`workflows` all `write`, covering exactly
+the two fixture repos — confirmed both from the local DB and by minting a real
+installation token and listing `GET /installation/repositories` against it.
+
+**Real scans, real plans.** A session cookie was minted directly against
+`storage.users.sign_in` for the existing user row (no browser needed for this
+part) and used to call the real endpoints, not fixer internals directly:
+
+- `POST /repo/scan` against `some-action-v1` (scan `643457eb`) surfaced all three
+  fixture findings (`docker-latest-tag-Dockerfile-L1`,
+  `secret-env-committed-.env`, `ci-pull-request-target-.github-workflows-label-sync.yml`)
+  plus a correct **decline** on `repo-license-present` (no manifest in this repo
+  declares a license — confirms the fixer refuses to guess rather than always
+  reporting a caveat-free success).
+- `GET .../findings/{key}/fix/plan` against all three produced real diffs: the
+  Dockerfile fixer resolved `python:latest` against Docker Hub's real anonymous-token
+  + manifest-digest API to `sha256:be8ccd0856…` (the one call in this whole stage
+  that had never hit a real registry before); the secret fixer proposed a clean
+  delete; the workflow fixer swapped the trigger correctly.
+- `POST /repo/scan` against `sentinels-fixture-web` (scan `f1c137e0`) surfaced both
+  fixture findings, and both plans were correct: `LicenseFixer` read `MIT` out of
+  the real `package.json` and generated the canonical text; `CiScaffoldFixer` wired
+  exactly the `lint`/`test`/`build` scripts that manifest actually declares, no more.
+
+**Narrower verification for the two header fixers.** The four `missing-*` header
+findings only exist on a URL scan linked to a repo (Stage D) — neither fixture repo
+is a deployed site, so this stage could not produce one through the real scan path.
+Instead, `SecurityHeaderFixer.plan()` was called directly against a real
+GitHub-backed `FileSource` (live API reads, real TOML parsing) with a hand-constructed
+`missing-csp` finding, for both fixture repos. Both plans were correct — nginx got
+four `add_header ... always;` lines after `server {`, netlify got a new `[[headers]]`
+table — and both passed the real `validate_plan()` unmodified. This exercises the
+network and parsing path but not the scan→finding half of the chain; those two
+fixers are less proven than the other five and cannot reach a real PR through the
+product's own apply endpoint without a genuine linked URL scan first.
+
+**Still not done, in the project's own 16-step definition:** every plan above stopped
+at diff generation. None was applied — no branch, no commit, no PR, no merge, no
+re-verify, no score delta, no audit row. The apply code path (`remediation/apply.py`,
+branch creation, PR body assembly) is untested by this stage; `plan()` being correct
+does not guarantee it. That is the next gap, not a formality after this one.
 
 Register the GitHub App (github.com/settings/apps): name "Sentinels Autofix", callback
 `http://localhost:8011/auth/github/callback`, **Setup URL**
