@@ -1160,11 +1160,43 @@ network and parsing path but not the scan→finding half of the chain; those two
 fixers are less proven than the other five and cannot reach a real PR through the
 product's own apply endpoint without a genuine linked URL scan first.
 
-**Still not done, in the project's own 16-step definition:** every plan above stopped
-at diff generation. None was applied — no branch, no commit, no PR, no merge, no
-re-verify, no score delta, no audit row. The apply code path (`remediation/apply.py`,
-branch creation, PR body assembly) is untested by this stage; `plan()` being correct
-does not guarantee it. That is the next gap, not a formality after this one.
+**Still not done, in the project's own 16-step definition (at the point the fixture
+work above finished):** every plan stopped at diff generation. None was applied — no
+branch, no commit, no PR, no merge, no re-verify, no score delta, no audit row. The
+apply code path (`remediation/apply.py`, branch creation, PR body assembly) was
+untested by the fixture work above; `plan()` being correct does not guarantee it.
+
+**One finding closed the full loop for real, immediately after.** With the
+developer's explicit go-ahead on the exact diff shown above,
+`ci-pull-request-target-.github-workflows-label-sync.yml` (scan `643457eb`) went
+through the product's own endpoints end to end, not fixer internals:
+
+1. `POST /scans/{id}/fix/plan` saved the plan, then `POST .../fix/apply` with
+   `dry_run: true` previewed the exact branch name, commit message, PR title, and
+   body the real call would produce.
+2. `dry_run: false`, on explicit confirmation of that preview, opened
+   [`arihantjaino7/some-action-v1#3`](https://github.com/arihantjaino7/some-action-v1/pull/3)
+   — branch `sentinels/fix-643457eb-1790041009`. `gh pr diff` against the live PR
+   confirmed exactly the one-line trigger swap, nothing else touched (1 file,
+   +1/-1).
+3. Merged via `gh pr merge` (the developer's own account, explicit go-ahead in
+   chat — same precedent as the 2026-08-13 entry below).
+4. `POST /findings/{key}/verify` re-ran the real `repo-config` agent against the
+   merged `main`: `target_fixed: true`, score `45 → 60` (`+15`), `still_failing`
+   correctly still listed the untouched findings (`docker-latest-tag-...`, etc.).
+5. `GET /fix/summary` (Stage H's fix) dropped `fixable_count` from 6 to 5 — the
+   first live confirmation that the badge-subtraction logic actually works against
+   a real merged-and-verified fix, not just its own unit tests.
+6. `GET /audit` showed exactly three rows, in order: `pr_opened` → `pr_merged` →
+   `fix_verified`.
+
+Every one of the 16 definition-of-done steps is now proven true for one finding, on
+one real repository, through the product's own code — not mocked, not simulated.
+The other four scan-derived fixers from this stage (`docker-latest-tag`,
+`secret-env-committed`, `repo-license-present`, `repo-ci-configured`) are still only
+verified through `plan()` — each needs its own explicit go-ahead before it gets the
+same apply→merge→verify treatment. The two `security-headers` paths remain the
+least proven of all seven, per the caveat above.
 
 Register the GitHub App (github.com/settings/apps): name "Sentinels Autofix", callback
 `http://localhost:8011/auth/github/callback`, **Setup URL**
