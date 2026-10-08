@@ -92,9 +92,9 @@ from storage.installations import (  # noqa: E402
     InstallationOwnedByAnotherUser,
     list_installations,
     revoke_installation,
+    revoke_installation_everywhere,
     save_installation,
 )
-from storage.installations import list_installations, revoke_installation, revoke_installation_everywhere, save_installation  # noqa: E402
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
 from storage.remediation import list_audit, list_audit_for_user, list_fix_applications, write_audit  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
@@ -617,8 +617,6 @@ def scan_unlink_repo(scan_id: str, user: User = Depends(current_user)) -> Respon
     return Response(status_code=204)
 
 
-@app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
-async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
 class UrlScanRequest(ScanRequest):
     """`POST /scan`'s body: the address, plus the person saying they may test it."""
 
@@ -642,7 +640,7 @@ def require_permission(confirmed: bool, user: User, url: str) -> None:
     write_audit(user.id, None, None, "scan_permission_confirmed", url)
 
 
-@app.post("/scan", response_model=ScanReport)
+@app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
 async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against `request.url` and return the report.
 
