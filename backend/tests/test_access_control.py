@@ -50,6 +50,7 @@ SIGNED_IN = {
     ("GET", "/auth/me"),
     ("GET", "/auth/github/install"),
     ("GET", "/installations"),
+    ("DELETE", "/account"),
     ("POST", "/installations/{installation_id}/revoke"),
     ("GET", "/audit"),
     ("POST", "/scan"),

@@ -662,6 +662,21 @@ export async function revokeInstallation(installationId: number): Promise<void> 
   if (!res.ok) await raiseApiError(res, `Couldn't disconnect (${res.status})`);
 }
 
+/** Delete the signed-in account and everything it owns. `confirmLogin` has to
+ *  be the account's own GitHub login — the backend refuses anything else. */
+export async function deleteAccount(confirmLogin: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/account`,
+    withAuth({
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_login: confirmLogin }),
+    }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't delete the account (${res.status})`);
+}
+
 /* ---------------------------------------------------------------------------
    PLAN-v5 Stage D: linking a URL scan to the repository that serves it — the
    bridge a header finding needs, since it has no repository of its own.
