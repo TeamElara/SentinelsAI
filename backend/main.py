@@ -80,6 +80,7 @@ from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
 from report.pdf import generate_pdf  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
+from storage.account import delete_account  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
 from storage.installations import list_installations, revoke_installation, save_installation  # noqa: E402
@@ -409,6 +410,30 @@ async def auth_install_callback(
 
     response = RedirectResponse(f"{frontend}/settings?installed={account}")
     response.delete_cookie("sentinels_install_state", path="/")
+    return response
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm_login: str
+
+
+@app.delete("/account")
+def account_delete(body: DeleteAccountRequest, user: User = Depends(current_user)) -> Response:
+    """Delete the signed-in account and everything it owns (`storage.account`
+    spells out what that covers and what is kept).
+
+    The caller has to send their own GitHub login back, so a stray request
+    can't delete anything. The response clears the session cookie; the
+    session row is already gone with the user. Uninstalling the App on GitHub
+    is something only the user can do, and the page tells them so.
+    """
+    if body.confirm_login.strip().lower() != user.github_login.lower():
+        raise HTTPException(
+            status_code=400, detail="Type your GitHub login exactly to confirm deleting the account."
+        )
+    delete_account(user.id)
+    response = Response(status_code=204)
+    response.delete_cookie(**_COOKIE_KWARGS)
     return response
 
 
