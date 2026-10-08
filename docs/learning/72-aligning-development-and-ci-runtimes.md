@@ -19,3 +19,7 @@ chain; the registry has no patched braces release. Do not downgrade Next's
 ESLint configuration to 14.x just to silence the audit. CI lints only trusted
 repository patterns, and this dependency is excluded from production installs.
 Track https://github.com/advisories/GHSA-vfj7-8cjw-p6xm for a compatible patch.
+
+The backend production audit also identified two PyJWT 2.14.0 advisories.
+Upgrade to 2.15.1, retain the existing JWT tests, and run pip-audit against
+requirements.txt in CI alongside the frontend production dependency audit.
