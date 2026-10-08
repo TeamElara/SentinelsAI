@@ -10,9 +10,10 @@ Two entry points:
   empty, prepend a scheme if missing, then raise ValueError on anything
   unusable) so `main.py` can convert it to a 400 with the same one-line
   `except ValueError` it already has for URL scans.
-- `fetch_repo` -- an async context manager. Downloads the repo's tarball,
-  extracts it into a fresh temp directory, yields that directory, then
-  deletes it on the way out -- success or failure, via `finally`.
+- `fetch_repo` -- an async context manager. Streams the repo's tarball to
+  a temp file (never into memory), extracts it into a fresh temp
+  directory, yields that directory, then deletes everything on the way out
+  -- success, failure or cancellation, via `finally`.
 
 CLAUDE.md's repo-side non-negotiable applies here more than anywhere else in
 this codebase: this only ever reads bytes out of the tarball. Nothing here
@@ -20,7 +21,7 @@ imports, installs, or executes a single line of the scanned repo's code.
 """
 from __future__ import annotations
 
-import io
+import asyncio
 import re
 import shutil
 import tarfile
@@ -51,10 +52,14 @@ MAX_REPO_SIZE_KB = 50_000  # GitHub's reported on-disk repo size, ~50 MB
 MAX_TOTAL_EXTRACTED_BYTES = 100_000_000  # ~100 MB uncompressed
 MAX_FILE_COUNT = 5_000
 MAX_INDIVIDUAL_FILE_BYTES = 5_000_000  # ~5 MB, single file
-# Generous slack over the compressed size GitHub reported, in case that
-# number undersells the real tarball -- checked live during the download,
-# not just trusted from metadata.
-MAX_DOWNLOAD_BYTES = MAX_REPO_SIZE_KB * 1024 * 4
+# The tarball is one gzip of the files at a single commit; `MAX_REPO_SIZE_KB`
+# bounds the whole history, so a tarball this big means the size GitHub
+# reported was stale or wrong. Checked live during the download, not just
+# trusted from metadata.
+MAX_DOWNLOAD_BYTES = 60_000_000  # ~60 MB compressed
+# Longest the download may take in total. The client's own timeout only
+# limits the gap between two chunks, which a slow trickle never trips.
+DOWNLOAD_DEADLINE_SECONDS = 60.0
 
 SKIP_DIRS = {
     "node_modules", ".venv", "venv", "dist", "build", ".git",
@@ -156,38 +161,70 @@ async def fetch_repo(
     default_branch = meta["default_branch"]
     resolved_ref = ref or default_branch
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="sentinels-repo-"))
+    # One working directory holding both the downloaded tarball and the
+    # extracted tree, so the single `rmtree` below removes all of it however
+    # this block ends -- including a cancelled scan, which arrives here as
+    # `CancelledError` partway through the download.
+    work_dir = Path(tempfile.mkdtemp(prefix="sentinels-repo-"))
+    tarball_path = work_dir / "download.tar.gz"
+    root = work_dir / "repo"
+    root.mkdir()
     try:
-        tarball_bytes = bytearray()
         tarball_url = f"{GITHUB_API}/repos/{owner}/{repo}/tarball/{resolved_ref}"
-        # follow_redirects=True here (unlike exposure.py's checks) is correct:
-        # GitHub's tarball endpoint always 302s to codeload.github.com, and
-        # following that is the whole point of this request.
-        async with client.stream("GET", tarball_url, follow_redirects=True) as response:
-            if response.status_code == 404:
-                raise ValueError(f"Ref {resolved_ref!r} not found in {owner}/{repo}")
-            _raise_for_github_status(response)
-            async for chunk in response.aiter_bytes():
-                tarball_bytes.extend(chunk)
-                if len(tarball_bytes) > MAX_DOWNLOAD_BYTES:
-                    raise ValueError(
-                        f"{owner}/{repo}'s tarball exceeded the download size limit"
-                    )
+        try:
+            async with asyncio.timeout(DOWNLOAD_DEADLINE_SECONDS):
+                await _download_tarball(client, tarball_url, tarball_path, owner, repo, resolved_ref)
+        except TimeoutError:
+            raise ValueError(f"{owner}/{repo} took too long to download") from None
 
-        _extract_tarball(bytes(tarball_bytes), tmp_dir)
+        _extract_tarball(tarball_path, root)
+        # The extracted tree is all the agents read; don't keep a second
+        # copy of the repo on disk for the rest of the scan.
+        tarball_path.unlink(missing_ok=True)
 
         yield RepoFetchResult(
-            root=tmp_dir,
+            root=root,
             owner=owner,
             repo=repo,
             ref=resolved_ref,
             default_branch=default_branch,
         )
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _extract_tarball(data: bytes, dest: Path) -> None:
+async def _download_tarball(
+    client: httpx.AsyncClient, url: str, dest: Path, owner: str, repo: str, ref: str
+) -> None:
+    """Stream the tarball to `dest` chunk by chunk, stopping at the size limit.
+
+    Written to disk as it arrives: a repo near the limit used to sit in
+    memory twice (the growing buffer, then the copy handed to `tarfile`),
+    which on a 512 MB instance is most of the machine.
+    """
+    too_large = ValueError(f"{owner}/{repo}'s tarball exceeded the download size limit")
+    # follow_redirects=True here (unlike exposure.py's checks) is correct:
+    # GitHub's tarball endpoint always 302s to codeload.github.com, and
+    # following that is the whole point of this request.
+    async with client.stream("GET", url, follow_redirects=True) as response:
+        if response.status_code == 404:
+            raise ValueError(f"Ref {ref!r} not found in {owner}/{repo}")
+        _raise_for_github_status(response)
+
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+            raise too_large
+
+        written = 0
+        with dest.open("wb") as out:
+            async for chunk in response.aiter_bytes():
+                written += len(chunk)
+                if written > MAX_DOWNLOAD_BYTES:
+                    raise too_large
+                out.write(chunk)
+
+
+def _extract_tarball(tarball: Path, dest: Path) -> None:
     """Extract a GitHub tarball into `dest`, skipping build/dependency
     directories and binaries, and refusing to extract anything that would
     blow past the file-count / total-size / per-file-size guards.
@@ -199,7 +236,7 @@ def _extract_tarball(data: bytes, dest: Path) -> None:
     total_bytes = 0
     file_count = 0
 
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+    with tarfile.open(tarball, mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
