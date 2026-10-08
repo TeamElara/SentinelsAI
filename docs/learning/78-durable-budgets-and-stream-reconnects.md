@@ -49,6 +49,15 @@ Until activation, the old routes do not enforce the new daily budgets and the
 usage UI stays hidden when `/usage` is unavailable. Do not deploy the current
 head as a public beta on the strength of these offline tests.
 
+Additional integration seams: B4's `ScanBusy` is refunded and translated to
+HTTP 429; malformed target ValueErrors still keep their started allowance.
+The detached job closes its runner at completion/failure/deadline. A27's browser
+disconnect cancellation must be adapted when C7 activates: a disconnect closes
+only the subscriber; the bounded job stays alive so reconnect can join it.
+Adapt that regression test to assert no duplicate runner and eventual cleanup.
+After A6's checkbox lands, pass its actual boolean as the third argument to
+`streamScan`; C7's default is false and never invents a permission confirmation.
+
 ## Evidence and remaining live checks
 
 Twenty simultaneous connections competing for a limit of five yield exactly

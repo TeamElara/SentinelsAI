@@ -181,3 +181,29 @@ async def test_global_exhaustion_preserves_summary_and_refunds_interactive(accou
         await ops.charged(account.id, 'chat', lambda: client.call_groq([], interactive=True), unavailable_none=True)
     assert exc.value.status_code == 429
     assert count(account, 'chat') == 0
+
+
+async def test_b4_busy_rejection_refunds_and_job_deadline_closes_runner(account, monkeypatch):
+    import sys
+    import types
+    class ScanBusy(ValueError):
+        pass
+    monkeypatch.setitem(sys.modules, 'scan_limits', types.SimpleNamespace(ScanBusy=ScanBusy))
+    async def busy():
+        raise ScanBusy('You already have a scan running.')
+    with pytest.raises(HTTPException) as exc:
+        await ops.charged(account.id, 'url_scan', busy)
+    assert exc.value.status_code == 429 and count(account, 'url_scan') == 0
+    monkeypatch.setattr(ops, '_jobs', {})
+    monkeypatch.setattr(ops, 'enforce_scan_rate_limit', lambda uid: None)
+    monkeypatch.setattr(ops, 'DEADLINE_SECONDS', .02)
+    closed = asyncio.Event()
+    async def stuck():
+        try:
+            yield 'agent', '{}'
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+    response = await ops.stream_response(account.id, 'url_scan', 'site', str(uuid4()), stuck)
+    assert 'event: failed' in ''.join([part async for part in response.body_iterator])
+    assert closed.is_set() and count(account, 'url_scan') == 0
