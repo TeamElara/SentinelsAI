@@ -7,6 +7,7 @@
    plain <a> can. */
 
 import { Suspense } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { githubLoginUrl } from "@/lib/api";
 
@@ -44,6 +45,17 @@ export default function LoginPage() {
       >
         Sign in with GitHub →
       </a>
+      <p className="max-w-sm font-mono text-[10px] uppercase leading-relaxed tracking-[0.2em] text-muted">
+        By signing in you agree to the{" "}
+        <Link href="/terms" className="underline decoration-rule hover:text-parchment">
+          Terms
+        </Link>{" "}
+        and have read the{" "}
+        <Link href="/privacy" className="underline decoration-rule hover:text-parchment">
+          Privacy
+        </Link>{" "}
+        notice.
+      </p>
       <Suspense fallback={null}>
         <LoginError />
       </Suspense>
