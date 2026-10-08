@@ -90,6 +90,15 @@ def test_generator_does_not_restore_removed_pdf_alias():
     assert 'async def scan_pdf(' not in transform(''.join(lines))
 
 
+def test_permission_ui_patch_requires_real_checkbox():
+    from scripts.prepare_usage_integration import transform_permission_ui
+    with pytest.raises(ValueError, match='never invent'):
+        transform_permission_ui('stream(url, {\n    });\n  }\n\n  return (')
+    source = 'const [permission, setPermission] = useState(false);\nconst needsPermission = true;\nstream(url, {\n    });\n  }\n\n  return ('
+    result = transform_permission_ui(source)
+    assert '}, permission);' in result and 'permission_confirmed=true' not in result
+
+
 def test_rest_and_stream_share_daily_budget_and_reconnect(account, routes, monkeypatch):
     module, client = routes
     monkeypatch.setenv('SENTINELS_DAILY_URL_SCAN', '2')
