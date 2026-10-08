@@ -95,11 +95,28 @@ def transform(source):
     return result
 
 
+def transform_permission_ui(source):
+    if 'const [permission, setPermission]' not in source or 'needsPermission' not in source:
+        raise ValueError('A6 permission checkbox has not landed; never invent confirmation')
+    ending = '    });\n  }\n\n  return ('
+    if source.count(ending) != 1 or 'stream(url, {' not in source:
+        raise ValueError('Review the launcher stream callback before integrating permission')
+    return source.replace(ending, '    }, permission);\n  }\n\n  return (')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1] / 'main.py')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--frontend-source', type=Path)
+    parser.add_argument('--frontend-output', type=Path)
     args = parser.parse_args()
     original = args.source.read_text(encoding='utf-8')
     updated = transform(original)
     args.output.write_text(''.join(difflib.unified_diff(original.splitlines(keepends=True), updated.splitlines(keepends=True), fromfile='a/backend/main.py', tofile='b/backend/main.py')), encoding='utf-8')
+    if args.frontend_source:
+        if not args.frontend_output:
+            parser.error('--frontend-output is required with --frontend-source')
+        original = args.frontend_source.read_text(encoding='utf-8')
+        updated = transform_permission_ui(original)
+        args.frontend_output.write_text(''.join(difflib.unified_diff(original.splitlines(keepends=True), updated.splitlines(keepends=True), fromfile='a/frontend/components/ScanLauncher.tsx', tofile='b/frontend/components/ScanLauncher.tsx')), encoding='utf-8')

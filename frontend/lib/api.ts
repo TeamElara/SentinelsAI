@@ -218,8 +218,8 @@ export function streamScan(url: string, handlers: ScanStreamHandlers, permission
   return startScanStream(API_BASE, '/scan/stream', url, handlers, permissionConfirmed);
 }
 
-export function streamRepoScan(url: string, handlers: ScanStreamHandlers): () => void {
-  return startScanStream(API_BASE, '/repo/stream', url, handlers);
+export function streamRepoScan(url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
+  return startScanStream(API_BASE, '/repo/stream', url, handlers, permissionConfirmed);
 }
 
 /**
