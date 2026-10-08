@@ -1,16 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
+import { loadTs } from './load-ts.mjs';
 
-const source = readFileSync(new URL('../lib/scan-stream.ts', import.meta.url), 'utf8');
-const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-const { startScanStream } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+const { startScanStream } = await loadTs('../lib/scan-stream.ts');
 const originalFetch = globalThis.fetch;
 const originalTimeout = globalThis.setTimeout;
 
 function run(fetcher) {
-  globalThis.fetch = fetcher;
+  globalThis.fetch = (address, options) => address.endsWith('/health') ? Promise.resolve(Response.json({ status: 'ok' })) : fetcher(address, options);
   globalThis.setTimeout = (callback, ms, ...args) => originalTimeout(callback, ms === 5000 ? 1 : ms, ...args);
   const agents = [];
   let stop;
@@ -66,6 +63,7 @@ test('component cancellation aborts transport without surfacing an error', async
     const { stop } = run(async (_address, options) => new Promise((_resolve, reject) => {
       options.signal.addEventListener('abort', () => { aborted = true; reject(new DOMException('Aborted', 'AbortError')); });
     }));
+    await new Promise(resolve => originalTimeout(resolve, 1));
     stop();
     await new Promise(resolve => originalTimeout(resolve, 10));
     assert.equal(aborted, true);

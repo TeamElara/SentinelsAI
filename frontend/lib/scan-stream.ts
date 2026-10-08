@@ -1,4 +1,5 @@
 import type { AgentResult, ScanReport, ScanStreamHandlers } from './api';
+import { waitForScannerHealth } from './scanner-health';
 
 /** Fetch exposes 429 responses, unlike EventSource. Retries retain the job ID. */
 export function startScanStream(base: string, path: string, url: string, handlers: ScanStreamHandlers): () => void {
@@ -16,6 +17,8 @@ export function startScanStream(base: string, path: string, url: string, handler
     if (controller.signal.aborted) abort();
   });
   async function run() {
+    await waitForScannerHealth(base, controller.signal, handlers.onWaking);
+    handlers.onReady?.();
     for (let attempt = 0; attempt < 4 && !finished && !controller.signal.aborted; attempt++) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
@@ -40,7 +43,8 @@ export function startScanStream(base: string, path: string, url: string, handler
         while (!finished) {
           const { value, done } = await reader.read();
           if (done) throw new Error('Stream disconnected before completion.');
-          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          buffer += decoder.decode(value, { stream: true });
+          buffer = buffer.replace(/\r\n/g, '\n');
           let end: number;
           while ((end = buffer.indexOf('\n\n')) >= 0 && !finished) {
             const block = buffer.slice(0, end);

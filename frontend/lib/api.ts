@@ -1,4 +1,5 @@
 import { startScanStream } from './scan-stream';
+export { waitForScannerHealth } from './scanner-health';
 /* The one place the frontend knows the backend exists.
 
    These types are a hand-written mirror of backend/models.py. They are not
@@ -202,6 +203,8 @@ export function githubLoginUrl(): string {
 }
 
 export interface ScanStreamHandlers {
+  onWaking?: () => void;
+  onReady?: () => void;
   /** Called once per agent, the instant it finishes — real completion order. */
   onAgent: (result: AgentResult) => void;
   /** Called exactly once, when the full report is ready. */
