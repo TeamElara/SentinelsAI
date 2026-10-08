@@ -47,6 +47,30 @@ ALIASES = {
 AGENT_PENALTY_CAP = 20
 _CAPPED_AGENTS = {"api-security", "subdomain", "misconfig"}
 
+# An alias describes the same issue regardless of which agent observed it.
+# Its canonical check owns the penalty, including when only an alias exists.
+CANONICAL_OWNERS = {
+    "missing-hsts": "headers",
+    "missing-csp": "headers",
+    "tls-cert-invalid": "tls",
+}
+
+
+def _penalty_owner(base_id: str, finding: Finding) -> str:
+    if base_id in CANONICAL_OWNERS:
+        return CANONICAL_OWNERS[base_id]
+    for prefix, owner in (("api-", "api-security"), ("subdomain-", "subdomain"), ("misconfig-", "misconfig")):
+        if base_id.startswith(prefix):
+            return owner
+    return finding.agent
+
+
+def _selection_key(finding: Finding) -> tuple:
+    """Severity first, then stable provenance instead of completion order."""
+    return (-_SEVERITY_RANK[finding.severity], finding.agent, finding.id,
+            finding.status.value, finding.affected_url or "", finding.title,
+            finding.evidence)
+
 
 def _base_id(finding_id: str) -> str:
     """The part of a finding id before the first ':'.
@@ -124,7 +148,7 @@ def calculate_score(findings: list[Finding], url: str = "") -> int:
     for finding in non_passing:
         key = _issue_key(finding, scanned_host)
         current = survivors.get(key)
-        if current is None or _SEVERITY_RANK[finding.severity] > _SEVERITY_RANK[current.severity]:
+        if current is None or _selection_key(finding) < _selection_key(current):
             survivors[key] = finding
 
     # Rule 3: sort deterministically (never depends on which agent finished
@@ -150,8 +174,9 @@ def calculate_score(findings: list[Finding], url: str = "") -> int:
             weight = 0.0
         weighted_penalty = int(SEVERITY_PENALTY[finding.severity] * weight)
 
-        if finding.agent in _CAPPED_AGENTS:
-            capped_totals[finding.agent] += weighted_penalty
+        owner = _penalty_owner(base_id, finding)
+        if owner in _CAPPED_AGENTS:
+            capped_totals[owner] += weighted_penalty
         else:
             uncapped_penalty += weighted_penalty
 
