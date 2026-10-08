@@ -325,13 +325,13 @@ def test_scan_owner_is_none_for_a_missing_scan(temp_db):
     assert scan_owner("does-not-exist") is None
 
 
-def test_list_scans_for_a_user_includes_their_own_and_unowned_but_not_others(temp_db):
+def test_list_scans_for_a_user_includes_only_their_own(temp_db):
     save_scan(_report("mine"), user_id=1)
     save_scan(_report("legacy"))  # unowned, pre-Stage-0
     save_scan(_report("someone-elses"), user_id=2)
 
     ids = {s.id for s in list_scans(user_id=1)}
-    assert ids == {"mine", "legacy"}
+    assert ids == {"mine"}
 
 
 def test_list_scans_with_no_user_id_returns_everything(temp_db):

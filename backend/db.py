@@ -345,6 +345,14 @@ CREATE TABLE scan_repo_links (
 );
 """
 
+# v15 (Launch Plan A5): a way to stop one account without deleting anything.
+# `blocked` is checked on every request in auth/deps.py, so setting it takes
+# effect immediately for sessions that already exist.
+_V15_SCHEMA = """
+ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+"""
+
+# Each entry is (version, schema sql to apply to go from version-1 to version).
 _V16_SCHEMA = """
 ALTER TABLE scans ADD COLUMN scorer_version TEXT NOT NULL DEFAULT 'legacy-v1';
 """
@@ -407,6 +415,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (12, _V12_SCHEMA),
     (13, _V13_SCHEMA),
     (14, _V14_SCHEMA),
+    (15, _V15_SCHEMA),
     (16, _V16_SCHEMA),
     (17, _V17_SCHEMA),
     (18, _V18_SCHEMA),

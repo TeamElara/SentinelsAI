@@ -80,6 +80,37 @@ Vercel → New Project → import this repo → set **Root Directory** to
   `github.com/settings/apps/<slug>` → Permissions & events first, then
   reinstall/accept the upgrade; there is nothing to configure per-installation
   until the App is requesting something.
+- On the App's settings page (`github.com/settings/apps/<slug>` → General →
+  Identifying and authorizing users), turn on **Request user authorization
+  (OAuth) during installation**. The install callback
+  (`/auth/github/install/callback`) needs the `code` GitHub then adds to prove
+  that the person finishing the install is the signed-in Sentinels user and can
+  access that installation. With the setting off, every install is refused with
+  "GitHub didn't confirm who you are during the install". The App must also be
+  allowed to read a collaborator's permission on a repository (Metadata: read);
+  Sentinels checks that the signed-in user can push to a repository before it
+  opens a fix pull request there, and treats anything it can't confirm as no.
+- Set the beta gate before inviting anyone (all in `backend/.env.example`):
+  `SENTINELS_ALLOWED_GITHUB_IDS` (numeric GitHub ids of the people you invited)
+  and `SENTINELS_ENABLED_FIXERS` (leave it unset and **no** fixer can open a
+  pull request on a deployment; list a fixer's slug only after it has been
+  through a real preview → apply → merge → verify cycle). To stop one account,
+  from a Render shell in `backend/`:
+  `python -c "from storage.users import set_blocked; print(set_blocked('login', True))"`.
+- The emergency switches are `SENTINELS_SCANS_PAUSED=1` (no new scans or
+  re-verifications) and `SENTINELS_WRITES_PAUSED=1` (no new pull requests;
+  previews still work). Render restarts the service when an environment
+  variable changes, so they take effect after the restart, not instantly. Flip
+  one on the real service once and write the measured time here:
+  **not measured yet**.
+- Webhook (so an uninstall on GitHub shows up in Sentinels): on the App's
+  settings page tick **Active** under Webhook, set the **Webhook URL** to
+  `https://<your-vercel-domain>/api/github/webhook` (the frontend rewrites
+  `/api/*` to Render), set a **Webhook secret**, put the same value in
+  `GITHUB_APP_WEBHOOK_SECRET` on Render, and under Permissions & events →
+  Subscribe to events tick **Installation**. In GitHub's "Recent deliveries" a
+  working setup shows 200; a 401 means the secret doesn't match, a 503 means
+  `GITHUB_APP_WEBHOOK_SECRET` isn't set on Render.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

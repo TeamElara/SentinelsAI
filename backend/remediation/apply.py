@@ -44,12 +44,14 @@ from models import (
 )
 from remediation import pr_body
 from remediation.budget import MAX_FILES_PER_PR, MAX_PRS_PER_HOUR, MAX_PRS_PER_SCAN
+from remediation.access import RepoAccessError, require_write_access
+from remediation.flags import fixer_enabled
 from remediation.github import GitHubWriteError, GitHubWriter, commit_files
 from remediation.linking import repo_target
 from remediation.patch import PlanValidationError, validate_plan
 from remediation.source import get_file, resolve_ref_sha
-from remediation.tokens import TokenError, TokenProvider, default_provider
-from storage.installations import active_installation_for
+from remediation.tokens import InstallationGone, TokenError, TokenProvider, default_provider
+from storage.installations import active_installation_for, revoke_installation_everywhere
 from storage.scans import scan_owner
 from storage.remediation import (
     active_fix_applications,
@@ -268,6 +270,14 @@ async def apply_fixes(
         )
 
     pairs = _load_plans(report, finding_keys)
+    if not dry_run:
+        disabled = sorted({plan.fixer_slug for _, plan in pairs if not fixer_enabled(plan.fixer_slug)})
+        if disabled:
+            raise ApplyError(
+                f"Applying this kind of fix isn't enabled yet ({', '.join(disabled)}). "
+                "You can still preview it.",
+                status=403,
+            )
     existing = _check_idempotency(report.id, finding_keys)            # 2
     if existing is not None:
         return FixApplyResult(
@@ -297,6 +307,16 @@ async def apply_fixes(
     async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             installation_token = await provider.token_for(client, installation.installation_id)
+        except InstallationGone as exc:
+            # GitHub is the authority on whether the App is still installed.
+            # Stop using the grant now rather than failing the same way on
+            # every later attempt, until the user installs the App again.
+            revoke_installation_everywhere(installation.installation_id)
+            raise ApplyError(
+                f"The Sentinels App was uninstalled from {owner} on GitHub. "
+                "Install it again from Settings, then try again.",
+                status=409,
+            ) from exc
         except TokenError as exc:
             raise ApplyError(str(exc), status=502) from exc
 
@@ -305,6 +325,17 @@ async def apply_fixes(
         # all, and the drift check must not mistake "you can't see it" for
         # "it was deleted".
         client.headers["Authorization"] = f"Bearer {installation_token.token}"
+
+        # An installation is a grant to the whole account. Whether *this
+        # person* may push to *this repository* is a separate question, and
+        # it is asked before any read of the repository's contents or any
+        # write -- including for a dry run.
+        try:
+            await require_write_access(
+                client, installation_token.token, owner, repo, user.github_login
+            )
+        except RepoAccessError as exc:
+            raise ApplyError(str(exc), status=exc.status) from exc
 
         writer = GitHubWriter(client, owner, repo, installation_token.token)
         try:

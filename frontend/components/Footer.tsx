@@ -356,9 +356,23 @@ export function Footer() {
             </div>
           </div>
 
-          <p className="mt-16 font-mono text-[10px] uppercase tracking-[0.2em] text-muted lg:mt-24">
-            Sentinels — passive website security inspection
-          </p>
+          <div className="mt-16 flex flex-wrap items-baseline gap-x-8 gap-y-3 lg:mt-24">
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+              Sentinels — passive website security inspection
+            </p>
+            <Link
+              href="/terms"
+              className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted underline decoration-rule transition-colors hover:text-parchment"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/privacy"
+              className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted underline decoration-rule transition-colors hover:text-parchment"
+            >
+              Privacy
+            </Link>
+          </div>
         </div>
       </footer>
 

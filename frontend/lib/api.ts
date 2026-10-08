@@ -568,6 +568,21 @@ export async function revokeInstallation(installationId: number): Promise<void> 
   if (!res.ok) await raiseApiError(res, `Couldn't disconnect (${res.status})`);
 }
 
+/** Delete the signed-in account and everything it owns. `confirmLogin` has to
+ *  be the account's own GitHub login — the backend refuses anything else. */
+export async function deleteAccount(confirmLogin: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/account`,
+    withAuth({
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_login: confirmLogin }),
+    }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't delete the account (${res.status})`);
+}
+
 /* ---------------------------------------------------------------------------
    PLAN-v5 Stage D: linking a URL scan to the repository that serves it — the
    bridge a header finding needs, since it has no repository of its own.
@@ -770,10 +785,10 @@ export async function fetchChatHistory(scanId: string): Promise<ChatMessage[]> {
 }
 
 /**
- * POST the report already sitting in this page's state to `POST /scan/pdf`
- * and save the PDF it comes back with. No re-scan involved — the backend
- * prints exactly the report handed to it, so the file always matches what's
- * on screen (see the endpoint's docstring in `backend/main.py`).
+ * Download the stored report as a PDF from `GET /scans/{id}/export/pdf`. The
+ * backend prints its own stored copy of the scan, never a report sent by the
+ * browser, so only the scan's owner can get one — and a scan is immutable
+ * once saved, so the file matches what's on screen.
  */
 export async function fetchExportFormats(): Promise<string[]> {
   const response = await fetch(`${API_BASE}/export/formats`, withAuth());
@@ -783,7 +798,10 @@ export async function fetchExportFormats(): Promise<string[]> {
 }
 
 export async function downloadReportPdf(report: ScanReport): Promise<void> {
-  const response = await fetch(`${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`, withAuth());
+  const response = await fetch(
+    `${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`,
+    withAuth(),
+  );
   checkAuth(response);
   if (typeof window !== "undefined") window.dispatchEvent(new Event("usage-changed"));
 

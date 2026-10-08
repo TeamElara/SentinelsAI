@@ -7,6 +7,7 @@
    plain <a> can. */
 
 import { Suspense } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { githubLoginUrl } from "@/lib/api";
 
@@ -15,6 +16,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_code: "GitHub didn't send back an authorization code. Try again.",
   exchange_failed: "GitHub rejected the sign-in attempt. Try again.",
   identity_failed: "Couldn't read your GitHub profile. Try again.",
+  not_invited: "Sentinels is invite-only during the beta. Ask the team for an invite.",
+  suspended: "This account has been suspended.",
   server_not_configured:
     "Sign-in isn't configured on this server yet (missing SENTINELS_SESSION_SECRET).",
 };
@@ -44,6 +47,17 @@ export default function LoginPage() {
       >
         Sign in with GitHub →
       </a>
+      <p className="max-w-sm font-mono text-[10px] uppercase leading-relaxed tracking-[0.2em] text-muted">
+        By signing in you agree to the{" "}
+        <Link href="/terms" className="underline decoration-rule hover:text-parchment">
+          Terms
+        </Link>{" "}
+        and have read the{" "}
+        <Link href="/privacy" className="underline decoration-rule hover:text-parchment">
+          Privacy
+        </Link>{" "}
+        notice.
+      </p>
       <Suspense fallback={null}>
         <LoginError />
       </Suspense>

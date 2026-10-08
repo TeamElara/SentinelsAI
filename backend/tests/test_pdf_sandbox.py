@@ -132,7 +132,7 @@ async def test_disabled_pdf_is_a_404_and_never_starts_a_browser(browser, monkeyp
     assert browser.calls == []
 
 
-def test_both_pdf_routes_answer_404_when_disabled(temp_db, monkeypatch, browser):
+def test_the_pdf_route_answers_404_when_disabled(temp_db, monkeypatch, browser):
     monkeypatch.setenv("SENTINELS_PDF_ENABLED", "false")
     monkeypatch.setenv("SENTINELS_SESSION_SECRET", "test-signing-secret")
     from fastapi.testclient import TestClient
@@ -152,11 +152,9 @@ def test_both_pdf_routes_answer_404_when_disabled(temp_db, monkeypatch, browser)
     client.cookies.set("sentinels_session", session.cookie_value(token, "test-signing-secret"))
 
     stored = client.get("/scans/scan-1/export/pdf")
-    posted = client.post("/scan/pdf", json=_report().model_dump(mode="json"))
     other_format = client.get("/scans/scan-1/export/json")
 
     assert stored.status_code == 404 and "turned off" in stored.json()["detail"]
-    assert posted.status_code == 404 and "turned off" in posted.json()["detail"]
     assert other_format.status_code == 200
     assert browser.calls == []
 

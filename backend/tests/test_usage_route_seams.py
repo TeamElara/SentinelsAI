@@ -18,6 +18,15 @@ from scripts.prepare_usage_integration import transform
 from storage.scans import save_scan
 from tests.test_usage import account, count
 
+# These exercise the *prepared* C7 route patch against a main.py shaped like the
+# repo before Track A landed: they append a stand-in for A1's helpers to the
+# current main.py. With A1-A8 and B1-B4 merged, main.py already has the real
+# helpers (and A5's pause switches, A6's permission body, B's 429), so the seam
+# no longer describes anything. Activating C7 for real means applying the patch
+# to this main.py by hand and testing the routes themselves; until that happens
+# these stay skipped rather than silently passing against the wrong shape.
+pytestmark = pytest.mark.skip(reason="C7 route activation is pending; see the note above")
+
 
 OWNERSHIP_SEAM = '''
 def load_owned_scan(scan_id, user):

@@ -145,7 +145,7 @@ def test_scan_route_answers_400_not_allowed_for_localhost(temp_db, monkeypatch, 
     client = TestClient(main.app)
     client.cookies.set("sentinels_session", session.cookie_value(token, "test-signing-secret"))
 
-    response = client.post("/scan", json={"url": "http://localhost:8000"})
+    response = client.post("/scan", json={"url": "http://localhost:8000", "permission_confirmed": True})
 
     assert response.status_code == 400
     assert response.json()["detail"].startswith("Not allowed:")

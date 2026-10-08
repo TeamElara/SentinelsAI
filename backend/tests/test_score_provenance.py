@@ -26,13 +26,26 @@ def test_new_score_version_round_trips(temp_db):
     assert list_scans()[0].scorer_version == SCORER_VERSION
 
 
-def test_reserved_migration_15_can_land_after_16(temp_db, monkeypatch):
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, (15, "ALTER TABLE users ADD COLUMN reserved_test INTEGER DEFAULT 0;\n")])
-    db.init_db()
-    db.init_db()
+def test_migration_15_can_land_after_16_to_18(tmp_path, monkeypatch):
+    """Track A's migration 15 (users.blocked) was reserved while Track C's 16-18
+    were built, so a database may already be at 18 without it. The ledger must
+    still apply it, once."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "late.db")      # a fresh file, not temp_db's
+    everything = list(db.MIGRATIONS)
+    monkeypatch.setattr(db, "MIGRATIONS", [m for m in everything if m[0] != 15])
+    db.init_db()                                  # a database at 18 that never saw 15
     conn = db.get_connection()
-    assert conn.execute("SELECT reserved_test FROM users").fetchall() == []
+    assert "blocked" not in [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    assert conn.execute("SELECT version FROM schema_migrations WHERE version=15").fetchone() is None
+    conn.close()
+
+    monkeypatch.setattr(db, "MIGRATIONS", everything)
+    db.init_db()
+    db.init_db()                                  # idempotent
+    conn = db.get_connection()
+    assert conn.execute("SELECT blocked FROM users").fetchall() == []
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=15").fetchone() is not None
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 18
     conn.close()
 
 

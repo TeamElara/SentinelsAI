@@ -21,6 +21,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from auth.session import COOKIE_NAME, get_session_secret, hash_token, token_from_cookie
+from auth.gate import ensure_allowed
 from models import User
 from storage.users import user_for_token_hash
 
@@ -57,6 +58,7 @@ def current_user(request: Request) -> User:
     user = _resolve(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in to continue.")
+    ensure_allowed(user)
     return user
 
 
