@@ -1,10 +1,11 @@
 import type { AgentResult, ScanReport, ScanStreamHandlers } from './api';
 
 /** Fetch exposes 429 responses, unlike EventSource. Retries retain the job ID. */
-export function startScanStream(base: string, path: string, url: string, handlers: ScanStreamHandlers): () => void {
+export function startScanStream(base: string, path: string, url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
   const controller = new AbortController();
   const requestId = crypto.randomUUID();
-  const address = `${base}${path}?url=${encodeURIComponent(url)}&request_id=${requestId}`;
+  const permission = path === '/scan/stream' ? `&permission_confirmed=${permissionConfirmed}` : '';
+  const address = `${base}${path}?url=${encodeURIComponent(url)}&request_id=${requestId}${permission}`;
   let finished = false;
   const refresh = () => {
     if (typeof window !== 'undefined') window.dispatchEvent(new Event('usage-changed'));
