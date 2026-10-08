@@ -45,6 +45,7 @@ from models import (
 from remediation import pr_body
 from remediation.budget import MAX_FILES_PER_PR, MAX_PRS_PER_HOUR, MAX_PRS_PER_SCAN
 from remediation.access import RepoAccessError, require_write_access
+from remediation.flags import fixer_enabled
 from remediation.github import GitHubWriteError, GitHubWriter, commit_files
 from remediation.linking import repo_target
 from remediation.patch import PlanValidationError, validate_plan
@@ -269,6 +270,14 @@ async def apply_fixes(
         )
 
     pairs = _load_plans(report, finding_keys)
+    if not dry_run:
+        disabled = sorted({plan.fixer_slug for _, plan in pairs if not fixer_enabled(plan.fixer_slug)})
+        if disabled:
+            raise ApplyError(
+                f"Applying this kind of fix isn't enabled yet ({', '.join(disabled)}). "
+                "You can still preview it.",
+                status=403,
+            )
     existing = _check_idempotency(report.id, finding_keys)            # 2
     if existing is not None:
         return FixApplyResult(
