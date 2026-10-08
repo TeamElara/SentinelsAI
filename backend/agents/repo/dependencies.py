@@ -23,6 +23,7 @@ import httpx
 
 from agents.repo.base import BaseRepoAgent, RepoContext, RepoFile
 from models import EvidenceKind, Finding, Severity, Status
+from scan_coverage import record
 
 OWASP_VULNERABLE_COMPONENTS = "A06:2021 - Vulnerable and Outdated Components"
 
@@ -37,6 +38,7 @@ class Dependency:
     version: str
     ecosystem: str        # OSV's vocabulary: "PyPI" | "npm"
     source_file: str
+    resolved: bool = True
 
 
 _REQ_LINE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*==\s*([A-Za-z0-9_.+\-]+)")
@@ -85,6 +87,7 @@ def _parse_requirements_txt(text: str, source_file: str) -> list[Dependency]:
             continue
         match = _REQ_LINE_RE.match(line)
         if not match:
+            record(source_file, "partial", "Some requirements did not specify a supported exact version.")
             continue  # unpinned (>=, ~=) or extras ([foo]) -- can't resolve one version
         deps.append(Dependency(match.group(1), match.group(2), "PyPI", source_file))
     return deps
@@ -94,6 +97,7 @@ def _parse_package_json(text: str, source_file: str) -> list[Dependency]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        record(source_file, "unavailable", "Dependency manifest is invalid JSON.")
         return []
     deps = []
     for section in ("dependencies", "devDependencies"):
@@ -102,7 +106,10 @@ def _parse_package_json(text: str, source_file: str) -> list[Dependency]:
                 continue
             version = _resolve_pinned_version(raw_version)
             if version:
-                deps.append(Dependency(name, version, "npm", source_file))
+                deps.append(Dependency(name, version, "npm", source_file,
+                                       resolved=not bool(split_version_prefix(raw_version)[0])))
+            else:
+                record(source_file, "partial", "Some dependency specifications could not be resolved to an exact version.")
     return deps
 
 
@@ -110,6 +117,7 @@ def _parse_package_lock_json(text: str, source_file: str) -> list[Dependency]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        record(source_file, "unavailable", "Dependency lockfile is invalid JSON.")
         return []
     deps: list[Dependency] = []
 
@@ -144,6 +152,7 @@ def _parse_pyproject_toml(text: str, source_file: str) -> list[Dependency]:
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
+        record(source_file, "unavailable", "Dependency manifest is invalid TOML.")
         return []
     deps = []
 
@@ -212,15 +221,21 @@ class DependenciesAgent(BaseRepoAgent):
     category = "Dependencies"
 
     async def scan(self, context: RepoContext) -> list[Finding]:
-        deps = self._collect_dependencies(context)[:_MAX_QUERIES]
+        collected = self._collect_dependencies(context)
+        if len(collected) > _MAX_QUERIES:
+            record("Dependency query budget", "partial", f"Only the first {_MAX_QUERIES} dependencies were queried.")
+        deps = collected[:_MAX_QUERIES]
         if not deps:
+            record("Dependency scope", "skipped", "No supported pinned dependency versions were found.", required=False)
             return []
 
         if context.client is None:
+            record("OSV lookup", "unavailable", "No HTTP client configured for vulnerability lookup.")
             return [self._unverified_finding(deps)]
 
         vuln_map = await self._query_osv(context.client, deps)
         if vuln_map is None:
+            record("OSV lookup", "unavailable", "Vulnerability service failed or returned an incomplete response.")
             return [self._unverified_finding(deps)]
 
         findings = [
@@ -228,6 +243,8 @@ class DependenciesAgent(BaseRepoAgent):
             for dep in deps
             if (key := (dep.ecosystem, dep.name, dep.version)) in vuln_map
         ]
+        if len(findings) > _MAX_FINDINGS:
+            record("Dependency findings budget", "partial", "The finding limit truncated the result set.")
         return findings[:_MAX_FINDINGS]
 
     def _collect_dependencies(self, context: RepoContext) -> list[Dependency]:
@@ -262,6 +279,8 @@ class DependenciesAgent(BaseRepoAgent):
                 key = (dep.ecosystem, dep.name)
                 if key in seen:
                     continue
+                if not dep.resolved:
+                    record(repo_file.path, "partial", "Manifest ranges were checked at their stated version; no resolved lockfile version was available.")
                 seen.add(key)
                 deps.append(dep)
 
@@ -272,6 +291,7 @@ class DependenciesAgent(BaseRepoAgent):
         try:
             return repo_file.abs_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
+            record(repo_file.path, "unavailable", "Dependency file could not be read.")
             return None
 
     async def _query_osv(
@@ -291,7 +311,10 @@ class DependenciesAgent(BaseRepoAgent):
             return None
 
         vuln_map: dict[tuple[str, str, str], list[str]] = {}
-        for dep, result in zip(deps, data.get("results", [])):
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list) or len(results) != len(deps) or any(not isinstance(r, dict) for r in results):
+            return None
+        for dep, result in zip(deps, results):
             ids = [v["id"] for v in (result.get("vulns") or []) if "id" in v]
             if ids:
                 vuln_map[(dep.ecosystem, dep.name, dep.version)] = ids

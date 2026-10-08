@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from agents.base import BaseAgent, ScanContext
 from models import EvidenceKind, Finding, Severity, Status
 from net.policy import ALLOWED_PORTS, BlockedTarget, resolve_and_check_sync
+from scan_coverage import record
 
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
 
@@ -83,6 +84,9 @@ class TLSAgent(BaseAgent):
         parsed = urlsplit(context.url)
 
         if parsed.scheme != "https":
+            record(self.checks[0], "completed", "Target uses HTTP; HTTPS absence was observed.")
+            for check in self.checks[1:]:
+                record(check, "skipped", "No TLS certificate or protocol to inspect on an HTTP target.")
             evidence_text = f"Scanned URL uses the '{parsed.scheme}' scheme, not https."
             return [Finding(
                 id="tls-not-used",
@@ -115,6 +119,10 @@ class TLSAgent(BaseAgent):
                 fetch_certificate, hostname, port, 10.0
             )
         except ssl.SSLError as exc:
+            record(self.checks[0], "completed", "HTTPS was attempted.")
+            record(self.checks[1], "completed", "TLS verification failed and is reported as a finding.")
+            for check in self.checks[2:]:
+                record(check, "unavailable", "Verified handshake did not provide certificate/protocol details.")
             # Covers an expired cert, an untrusted/self-signed chain, and a
             # hostname mismatch — all three raise SSLError, with the real
             # OpenSSL reason text already in `exc`. A DNS failure or refused

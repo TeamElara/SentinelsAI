@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from scan_coverage import record
 
 from agents.repo.base import BaseRepoAgent, RepoContext, RepoFile
 from models import EvidenceKind, Finding, Severity, Status
@@ -77,6 +78,7 @@ class ConfigAgent(BaseRepoAgent):
         try:
             text = gitignore.abs_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
+            record(gitignore.path, "unavailable", "Ignore configuration could not be read.")
             return []
         patterns = [
             line.strip() for line in text.splitlines()
@@ -131,6 +133,7 @@ class ConfigAgent(BaseRepoAgent):
         try:
             text = repo_file.abs_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
+            record(repo_file.path, "unavailable", "Configuration file could not be read.")
             return []
 
         file_slug = repo_file.path.replace("/", "-")
@@ -236,6 +239,7 @@ class ConfigAgent(BaseRepoAgent):
         try:
             text = repo_file.abs_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
+            record(repo_file.path, "unavailable", "Configuration file could not be read.")
             return []
 
         file_slug = repo_file.path.replace("/", "-")

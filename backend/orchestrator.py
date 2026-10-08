@@ -40,7 +40,7 @@ from models import AgentResult, ScanReport
 from net.client import make_scan_client
 from net.policy import BlockedTarget, check_target
 from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
-from scoring import calculate_score, count_by_severity, grade_for_score
+from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
 # Matches ANY "word://" prefix (http, https, ftp, javascript, ...) — not just
@@ -143,9 +143,13 @@ async def _finalize(
 
     score = calculate_score(findings, url)
     grade = grade_for_score(score)
-    summary = await summarize(url, score, grade, findings)
+    from scan_coverage import notice
+    coverage_notice = notice(agent_results)
+    summary = await summarize(url, score, grade, findings, coverage_notice=coverage_notice)
+    if coverage_notice:
+        summary = coverage_notice + (" " + summary if summary else "")
 
-    checklist = evaluate(findings)
+    checklist = evaluate(findings, agent_results=agent_results)
     readiness_score, deployment_status = compute_readiness(checklist)
 
     report = ScanReport(
@@ -155,6 +159,7 @@ async def _finalize(
         duration_ms=duration_ms,
         score=score,
         grade=grade,
+        scorer_version=SCORER_VERSION,
         summary=summary,
         counts=count_by_severity(findings),
         findings=findings,

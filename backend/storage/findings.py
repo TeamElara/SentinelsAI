@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 
 from models import AgentResult, EvidenceItem
 
@@ -18,10 +19,11 @@ def save_agent_results(
     for result in agent_results:
         conn.execute(
             """
-            INSERT INTO agent_runs (scan_id, agent, duration_ms, error, verdict)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO agent_runs (scan_id, agent, duration_ms, error, verdict, coverage_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (scan_id, result.agent, result.duration_ms, result.error, None),
+            (scan_id, result.agent, result.duration_ms, result.error, None,
+             json.dumps([c.model_dump() for c in result.coverage])),
         )
 
         for finding in result.findings:

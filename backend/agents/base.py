@@ -20,6 +20,7 @@ import httpx
 
 from agents.probe import ResponseCache
 from models import AgentResult, EvidenceItem, EvidenceKind, Finding
+import scan_coverage
 
 
 @dataclass
@@ -82,16 +83,20 @@ class BaseAgent(ABC):
         start = time.perf_counter()
         error: str | None = None
         findings: list[Finding] = []
+        coverage_token, coverage_records = scan_coverage.begin()
         try:
             findings = await self.scan(context)
             for finding in findings:
                 finding.agent = self.name
         except Exception as exc:  # noqa: BLE001 - deliberately broad, see note below
             error = f"{type(exc).__name__}: {exc}"
+        finally:
+            scan_coverage.end(coverage_token)
         duration_ms = int((time.perf_counter() - start) * 1000)
         return AgentResult(
             agent=self.name,
             findings=findings,
             duration_ms=duration_ms,
             error=error,
+            coverage=scan_coverage.finish(self.checks, findings, error, coverage_records),
         )

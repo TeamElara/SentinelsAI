@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 import httpx
+from scan_coverage import record
 
 if TYPE_CHECKING:
     from agents.base import ScanContext
@@ -109,10 +110,14 @@ async def _safe_request(
     context: "ScanContext", method: str, url: str, *, follow_redirects: bool, timeout: float
 ) -> httpx.Response | None:
     try:
-        return await context.cache.get(
+        response = await context.cache.get(
             context.client, url, method=method, follow_redirects=follow_redirects, timeout=timeout
         )
-    except _PROBE_ERRORS:
+        if response.status_code == 429 or response.status_code >= 500:
+            record(f"{method} {url}", "unavailable", f"Target returned HTTP {response.status_code}.")
+        return response
+    except _PROBE_ERRORS as exc:
+        record(f"{method} {url}", "unavailable", f"Probe failed: {type(exc).__name__}")
         return None
 
 
@@ -152,6 +157,7 @@ class RobotsGate:
         ok = self._parser.can_fetch("*", path)
         if not ok:
             self._skipped.append(path)
+            record(f"robots.txt: {path}", "skipped", "Target robots.txt disallows this probe.")
         return ok
 
     @property
@@ -197,6 +203,7 @@ class Budget:
         `partial`) once the count or the deadline is exhausted."""
         if self._used >= self.max_requests or (time.monotonic() - self._start) >= self.deadline_seconds:
             self.partial = True
+            record("Probe budget", "partial", "Request limit or time budget exhausted.")
             return False
         self._used += 1
         return True

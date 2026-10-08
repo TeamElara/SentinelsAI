@@ -13,6 +13,7 @@ M15) append further versions here rather than editing this one.
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "data" / "sentinels.db"
@@ -352,6 +353,53 @@ ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
 """
 
 # Each entry is (version, schema sql to apply to go from version-1 to version).
+_V16_SCHEMA = """
+ALTER TABLE scans ADD COLUMN scorer_version TEXT NOT NULL DEFAULT 'legacy-v1';
+"""
+
+_V18_SCHEMA = """
+ALTER TABLE agent_runs ADD COLUMN coverage_json TEXT NOT NULL DEFAULT '[]';
+"""
+
+_V17_SCHEMA = """
+CREATE TABLE usage (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0 CHECK(count >= 0),
+    PRIMARY KEY(user_id, day, kind)
+);
+CREATE TABLE global_usage (
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0 CHECK(count >= 0),
+    PRIMARY KEY(day, kind)
+);
+CREATE TABLE usage_reservations (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','completed','refunded')),
+    UNIQUE(user_id, kind, request_key)
+);
+CREATE INDEX idx_usage_reservations_active ON usage_reservations(created_at) WHERE state='active';
+CREATE TABLE scan_jobs (
+    id TEXT PRIMARY KEY REFERENCES usage_reservations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    scan_id TEXT REFERENCES scans(id) ON DELETE SET NULL,
+    error TEXT
+);
+"""
+
+# Version 15 is reserved for Track A's users.blocked migration. The ledger
+# below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_SCHEMA),
     (2, _V2_SCHEMA),
@@ -368,6 +416,9 @@ MIGRATIONS: list[tuple[int, str]] = [
     (13, _V13_SCHEMA),
     (14, _V14_SCHEMA),
     (15, _V15_SCHEMA),
+    (16, _V16_SCHEMA),
+    (17, _V17_SCHEMA),
+    (18, _V18_SCHEMA),
 ]
 
 
@@ -375,10 +426,39 @@ def get_connection() -> sqlite3.Connection:
     """One connection per call — sqlite3 connections aren't safe to share
     across threads, and FastAPI can run request handlers on different
     threads, so callers open, use, and close rather than holding one open."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+    driver = (os.environ.get("SENTINELS_DB_DRIVER") or ("libsql" if url else "sqlite")).strip()
+    if driver not in ("sqlite", "libsql"):
+        raise RuntimeError("SENTINELS_DB_DRIVER must be sqlite or libsql.")
+    if os.environ.get("RENDER") == "true" and (driver != "libsql" or not url):
+        raise RuntimeError("Render requires a remote Turso database; ephemeral SQLite cannot store production sessions or scans.")
+    if url and driver != "libsql":
+        raise RuntimeError("A configured Turso URL cannot be ignored by the sqlite driver.")
+    if driver == "libsql":
+        from urllib.parse import urlsplit
+        import libsql
+        from libsql_adapter import Connection
+        if url:
+            parsed = urlsplit(url)
+            if parsed.scheme not in ("libsql", "https") or not parsed.hostname or parsed.username or parsed.password:
+                raise RuntimeError("TURSO_DATABASE_URL must be a libsql:// or https:// database origin without embedded credentials.")
+            if not token:
+                raise RuntimeError("TURSO_AUTH_TOKEN is required for the remote database.")
+            # Connect to the primary directly: no local replica, sync delay or
+            # ephemeral disk can weaken quotas, ownership or session revocation.
+            conn = Connection(libsql.connect(url, auth_token=token))
+        else:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            conn = Connection(libsql.connect(str(DB_PATH)))
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        conn.close()
+        raise RuntimeError("The database must enforce foreign keys.")
     return conn
 
 
@@ -388,21 +468,43 @@ def init_db() -> None:
     gets the ones it's missing, and a fully up-to-date one does nothing."""
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         row = conn.execute("SELECT version FROM schema_version").fetchone()
         current = row["version"] if row is not None else 0
+        ledger_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+        ).fetchone() is not None
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        if not ledger_exists:
+            for version in range(1, current + 1):
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
+        applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
 
-        for version, sql in MIGRATIONS:
-            if version <= current:
+        for version, sql in sorted(MIGRATIONS):
+            if version in applied:
                 continue
-            conn.executescript(sql)
+            # executescript implicitly commits in sqlite3. Execute complete
+            # statements instead, so schema and ledger advance atomically.
+            statement = ""
+            for line in sql.splitlines(keepends=True):
+                statement += line
+                if sqlite3.complete_statement(statement):
+                    conn.execute(statement)
+                    statement = ""
+            if statement.strip():
+                raise ValueError(f"Incomplete SQL in migration {version}")
+            conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
+            current = max(current, version)
             if row is None:
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (current,))
                 row = True  # sentinel: subsequent iterations should UPDATE, not INSERT
             else:
-                conn.execute("UPDATE schema_version SET version = ?", (version,))
-            current = version
+                conn.execute("UPDATE schema_version SET version = ?", (current,))
 
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

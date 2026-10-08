@@ -14,6 +14,7 @@ content.
 from __future__ import annotations
 
 import re
+from scan_coverage import record
 from dataclasses import dataclass
 from typing import Callable
 
@@ -129,10 +130,12 @@ class PatternsAgent(BaseRepoAgent):
         findings: list[Finding] = []
         for repo_file in context.files:
             if len(findings) >= _MAX_FINDINGS:
+                record("Pattern findings budget", "partial", "Finding limit reached before all files were checked.")
                 break
             try:
                 text = repo_file.abs_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
+                record(repo_file.path, "unavailable", "Source file could not be read.")
                 continue
 
             file_slug = repo_file.path.replace("/", "-")
@@ -161,4 +164,6 @@ class PatternsAgent(BaseRepoAgent):
                         ],
                     ))
 
+        if len(findings) > _MAX_FINDINGS:
+            record("Pattern findings budget", "partial", "Finding limit truncated the output.")
         return findings[:_MAX_FINDINGS]

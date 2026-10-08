@@ -23,7 +23,7 @@ import { EXPO_OUT } from "@/components/landing/scan-select/motion";
 function verdict(result: AgentResult): string {
   if (result.error) return "Failed";
   if (result.findings.some(isProblem)) return "Issues found";
-  return "Clean";
+  return result.coverage_status === "completed" ? "No issues observed" : "Incomplete";
 }
 
 export function AgentPeekDialog({
@@ -180,7 +180,7 @@ export function AgentPeekDialog({
 
             {!result.error && problems.length === 0 && (
               <p className="mt-6 border-t border-rule pt-6 text-sm text-muted">
-                Every check passed here — nothing to fix.
+                No issues observed. Coverage: {result.coverage_status ?? "unavailable"}. Review the full report for limitations.
               </p>
             )}
 

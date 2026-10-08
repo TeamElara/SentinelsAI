@@ -4,6 +4,8 @@ All pure — no HTTP, no fixtures beyond plain `Finding` construction.
 """
 from __future__ import annotations
 
+from itertools import permutations
+
 from models import Finding, Severity, Status
 from scoring import calculate_score
 
@@ -178,3 +180,42 @@ def test_cap_applies_independently_per_capped_agent():
     score = calculate_score(subdomain_findings + misconfig_findings, APEX)
     # Each agent capped at 20 independently -> 40 total, not one shared cap.
     assert score == 100 - 40
+
+
+def test_equal_severity_alias_is_invariant_in_every_permutation():
+    findings = [
+        _fail("missing-hsts", Severity.HIGH, agent="headers"),
+        _fail("api-missing-hsts", Severity.HIGH, agent="api-security"),
+        _fail("api-cors", Severity.HIGH, agent="api-security"),
+        _fail("api-docs", Severity.HIGH, agent="api-security"),
+    ]
+    assert {calculate_score(list(order), APEX) for order in permutations(findings)} == {65}
+    for order in permutations(findings):
+        assert calculate_score(list(order) * 2, APEX) == 65
+
+
+def test_alias_without_home_agent_still_uses_canonical_cap():
+    findings = [
+        _fail("api-missing-hsts", Severity.HIGH, agent="api-security"),
+        _fail("api-cors", Severity.HIGH, agent="api-security"),
+        _fail("api-docs", Severity.HIGH, agent="api-security"),
+    ]
+    assert calculate_score(findings, APEX) == 65
+
+
+def test_unknown_issue_equal_severity_ties_are_stable():
+    findings = [
+        _fail("shared-check", Severity.HIGH, agent="headers"),
+        _fail("shared-check", Severity.HIGH, agent="api-security"),
+        _fail("api-cors", Severity.HIGH, agent="api-security"),
+    ]
+    assert len({calculate_score(list(order), APEX) for order in permutations(findings)}) == 1
+
+
+def test_canonical_subdomain_header_policy_is_explicit():
+    findings = [
+        _fail("subdomain-missing-hsts", Severity.HIGH, agent="subdomain", affected_url=f"https://{host}")
+        for host in ("a.example.com", "b.example.com", "c.example.com")
+    ]
+    # Canonical Headers checks are uncapped: 15 + 7 + 7, rather than 20.
+    assert calculate_score(findings, APEX) == 71

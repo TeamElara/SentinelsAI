@@ -134,7 +134,7 @@ const FALLBACK_COLORS = ["#121317", "#061020", "#0C140D", "#1E0607", "#231308"];
 function statusLabel(result: AgentResult): string {
   if (result.error) return "Failed";
   const problems = result.findings.filter(isProblem).length;
-  if (problems === 0) return "Clean";
+  if (problems === 0) return result.coverage_status === "completed" ? "No issues observed" : "Incomplete";
   return `${problems} issue${problems === 1 ? "" : "s"}`;
 }
 

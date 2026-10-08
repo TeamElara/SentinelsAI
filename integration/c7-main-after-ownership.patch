@@ -1,0 +1,283 @@
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -70,6 +70,7 @@
+ from db import init_db  # noqa: E402
+ from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
+ from orchestrator import run_scan, run_scan_stream  # noqa: E402
++from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, router as usage_router
+ from rate_limit import enforce_scan_rate_limit  # noqa: E402
+ from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
+ from remediation.patch import PlanValidationError  # noqa: E402
+@@ -505,40 +506,19 @@
+ 
+ 
+ @app.post("/scan", response_model=ScanReport)
+-async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+-    """Run a full scan against `request.url` and return the report.
+-
+-    `async def` here (unlike `/health`'s plain `def`) because this endpoint
+-    genuinely awaits something — `run_scan` awaits real HTTP requests inside
+-    the agents it calls.
+-    """
+-    enforce_scan_rate_limit(user.id)
++async def scan(request: ScanRequest, user: User=Depends(current_user)) -> ScanReport:
+     try:
+-        return await run_scan(request.url, user_id=user.id)
++        return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
+     except ValueError as exc:
+-        # normalize_url's complaints (empty string, bad scheme, no host) are
+-        # the client's fault, not the server's — 400, not a 500 crash.
+-        raise HTTPException(status_code=400, detail=str(exc)) from exc
++        raise HTTPException(400, detail=str(exc)) from exc
+ 
+ 
+ @app.post("/repo/scan", response_model=ScanReport)
+-async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+-    """Run a full scan against a public GitHub repo (`request.url`) and
+-    return the report. The repo-side sibling of `POST /scan` -- same
+-    request/response shape, same 400-on-ValueError contract, a different
+-    orchestrator underneath (`repo_orchestrator.run_repo_scan`).
+-
+-    The live streaming variant (`GET /repo/stream`, mirroring
+-    `GET /scan/stream`) and the frontend launcher that calls it are R11's
+-    job (PLAN-v3, Phase R-D); this endpoint exists now so a repo scan is
+-    independently reachable and verifiable over real HTTP, the same way
+-    every other milestone in this codebase has been.
+-    """
+-    enforce_scan_rate_limit(user.id)
++async def repo_scan(request: ScanRequest, user: User=Depends(current_user)) -> ScanReport:
+     try:
+-        return await run_repo_scan(request.url, user_id=user.id)
++        return await scan_operation(user.id, 'repo_scan', lambda: run_repo_scan(request.url, user_id=user.id))
+     except ValueError as exc:
+-        raise HTTPException(status_code=400, detail=str(exc)) from exc
++        raise HTTPException(400, detail=str(exc)) from exc
+ 
+ 
+ def _sse(event: str, data: str) -> str:
+@@ -549,76 +529,21 @@
+ 
+ 
+ @app.get("/scan/stream")
+-async def scan_stream(
+-    url: str, request: Request, user: User = Depends(current_user)
+-) -> StreamingResponse:
+-    """Same scan as `POST /scan`, reported as it happens instead of all at
+-    once. Server-Sent Events, not JSON — a one-way, GET-only, plain-text
+-    streaming protocol the browser understands natively via `EventSource`,
+-    which is why this takes `url` as a query parameter instead of a JSON
+-    body the way `POST /scan` does: `EventSource` can only issue GET.
+-
+-    Emits one `event: agent` per finished agent (real completion order, not
+-    `AGENTS`' declared order), then one `event: done` carrying the complete
+-    `ScanReport`. A bad URL can't become a `400` the way it does for
+-    `POST /scan` — once the first byte of a streaming response has gone out,
+-    the status code (200) is already committed — so it's reported as
+-    `event: failed` instead, a message *inside* the otherwise-successful
+-    stream.
+-
+-    `Depends(current_user)` runs — and can 401 — before this function body
+-    starts, so an unauthenticated `EventSource` never gets as far as opening
+-    the stream. The rate-limit check runs here too, for the same reason: a
+-    429 raised before `StreamingResponse` is constructed is a normal HTTP
+-    error response; raised from inside `events()` it would just be another
+-    in-band SSE message after a 200 already went out.
+-
+-    The cross-site check runs before the rate limiter, so a refused request
+-    never uses up any of the user's scans.
+-    """
++async def scan_stream(url: str, request: Request, request_id: str, user: User=Depends(current_user)) -> StreamingResponse:
+     reject_cross_site_scan_start(request)
+-    enforce_scan_rate_limit(user.id)
+-
+     async def events():
+-        try:
+-            async for event_name, payload in run_scan_stream(url, user_id=user.id):
+-                yield _sse(event_name, payload.model_dump_json())
+-        except ValueError as exc:
+-            yield _sse("failed", json.dumps({"detail": str(exc)}))
+-
+-    return StreamingResponse(
+-        events(),
+-        media_type="text/event-stream",
+-        headers={"Cache-Control": "no-cache"},
+-    )
++        async for event, payload in run_scan_stream(url, user_id=user.id):
++            yield event, payload.model_dump_json()
++    return await stream_response(user.id, 'url_scan', url, request_id, events)
+ 
+ 
+ @app.get("/repo/stream")
+-async def repo_scan_stream(
+-    url: str, request: Request, user: User = Depends(current_user)
+-) -> StreamingResponse:
+-    """Same repo scan as `POST /repo/scan`, reported as it happens instead of
+-    all at once. The repo-side sibling of `GET /scan/stream` -- same SSE
+-    shape (`event: agent` per finished agent, one `event: done` at the end,
+-    a bad URL reported in-band as `event: failed` since the 200 is already
+-    committed by the time it's known), a different generator underneath
+-    (`repo_orchestrator.run_repo_scan_stream`).
+-    """
++async def repo_scan_stream(url: str, request: Request, request_id: str, user: User=Depends(current_user)) -> StreamingResponse:
+     reject_cross_site_scan_start(request)
+-    enforce_scan_rate_limit(user.id)
+-
+     async def events():
+-        try:
+-            async for event_name, payload in run_repo_scan_stream(url, user_id=user.id):
+-                yield _sse(event_name, payload.model_dump_json())
+-        except ValueError as exc:
+-            yield _sse("failed", json.dumps({"detail": str(exc)}))
+-
+-    return StreamingResponse(
+-        events(),
+-        media_type="text/event-stream",
+-        headers={"Cache-Control": "no-cache"},
+-    )
++        async for event, payload in run_repo_scan_stream(url, user_id=user.id):
++            yield event, payload.model_dump_json()
++    return await stream_response(user.id, 'repo_scan', url, request_id, events)
+ 
+ 
+ @app.get("/agents", response_model=list[AgentInfo])
+@@ -735,29 +660,14 @@
+ 
+ 
+ @app.post("/scans/{scan_id}/findings/{finding_key}/fix", response_model=FixSuggestion)
+-async def finding_fix(
+-    scan_id: str, finding_key: str, regenerate: bool = False, user: User = Depends(current_user)
+-) -> FixSuggestion:
+-    """Return an AI-generated fix suggestion for one finding (cached).
+-
+-    First call is a live LLM request (~3-8 s). Subsequent calls return the
+-    cached result instantly. `?regenerate=true` forces a fresh LLM call.
+-    With no GROQ_API_KEY: returns 503 with a clear message, never a 500.
+-    """
+-    report = load_owned_scan(scan_id, user)
+-    if not get_api_key():
+-        raise HTTPException(status_code=503, detail="AI fix suggestions require GROQ_API_KEY.")
+-
++async def finding_fix(scan_id: str, finding_key: str, regenerate: bool = False, user: User = Depends(current_user)) -> FixSuggestion:
++    report = load_owned_scan(scan_id, user)
+     finding = next((f for f in report.findings if f.id == finding_key), None)
+     if finding is None:
+-        raise HTTPException(
+-            status_code=404,
+-            detail=f"Finding {finding_key!r} not found in scan {scan_id!r}",
+-        )
+-
+-    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate)
++        raise HTTPException(404, 'Finding not found')
++    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate, user_id=user.id)
+     if suggestion is None:
+-        raise HTTPException(status_code=503, detail="Fix suggestion generation failed. Try again.")
++        raise HTTPException(503, 'AI fix generation is unavailable. Cached suggestions remain usable.')
+     return suggestion
+ 
+ 
+@@ -921,25 +831,14 @@
+ @app.post(
+     "/scans/{scan_id}/findings/{finding_key}/verify", response_model=VerificationResult
+ )
+-async def finding_verify(
+-    scan_id: str, finding_key: str, user: User = Depends(current_user)
+-) -> VerificationResult:
+-    """Re-run the agent responsible for one finding and report what changed
+-    (PLAN-v5 Stage C).
+-
+-    Downloads the repository again, runs exactly that one agent, and returns
+-    the real before/after score from the untouched deterministic scorer. When
+-    a fix Sentinels opened has merged, the matching `fix_applications` row
+-    moves to `verified` and keeps this result as its evidence; a pull request
+-    that hasn't merged yet is refused rather than verified against the old
+-    state of the repository.
+-    """
+-    report = load_owned_scan(scan_id, user)
+-
+-    try:
+-        return await verify_finding(report, user, finding_key)
+-    except VerifyError as exc:
+-        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
++async def finding_verify(scan_id: str, finding_key: str, user: User = Depends(current_user)) -> VerificationResult:
++    report = load_owned_scan(scan_id, user)
++    async def verify():
++        try:
++            return await verify_finding(report, user, finding_key)
++        except VerifyError as exc:
++            raise HTTPException(exc.status, detail=str(exc)) from exc
++    return await charged(user.id, 'verify', verify)
+ 
+ 
+ @app.get("/scans/{scan_id}/audit", response_model=list[AuditLogEntry])
+@@ -958,23 +857,14 @@
+ 
+ @app.post("/scans/{scan_id}/chat", response_model=ChatMessage)
+ async def chat_post(scan_id: str, body: ChatQuestion, user: User = Depends(current_user)) -> ChatMessage:
+-    """Ask one question about a completed scan.
+-
+-    Persists both the user question and the assistant answer to the DB so the
+-    conversation survives refresh. With no GROQ_API_KEY: returns 503, not 500.
+-    """
+-    report = load_owned_scan(scan_id, user)
+-    if not get_api_key():
+-        raise HTTPException(status_code=503, detail="Chat requires GROQ_API_KEY.")
+-
++    report = load_owned_scan(scan_id, user)
+     question = body.question.strip()
+-    if not question:
+-        raise HTTPException(status_code=422, detail="question must not be empty")
+-
+-    msg = await chat_answer(scan_id, report, report.checklist, question)
+-    if msg is None:
+-        raise HTTPException(status_code=503, detail="Chat answer generation failed. Try again.")
+-    return msg
++    if not question or len(question) > 12000:
++        raise HTTPException(422, 'Question must contain 1–12000 characters.')
++    message = await chat_answer(scan_id, report, report.checklist, question, user_id=user.id)
++    if message is None:
++        raise HTTPException(503, 'Chat is unavailable. The report is still usable.')
++    return message
+ 
+ 
+ @app.get("/scans/{scan_id}/chat", response_model=list[ChatMessage])
+@@ -1005,7 +895,7 @@
+     report = load_owned_scan(scan_id, user)
+ 
+     fixes = load_fixes_for_scan(scan_id, PROMPT_VERSION)
+-    content = await exporter.render(report, fixes)
++    content = await pdf_operation(user.id, lambda: exporter.render(report, fixes)) if format_id == 'pdf' else await exporter.render(report, fixes)
+ 
+     host = urlparse(report.url).netloc or "report"
+     slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
+@@ -1021,26 +911,8 @@
+ 
+ @app.post("/scan/pdf")
+ async def scan_pdf(report: ScanReport, user: User = Depends(current_user)) -> Response:
+-    """Deprecated alias — kept through M17 per PLAN-v2.md, then removed.
+-
+-    Prints a *finished* report to PDF, taking the whole `ScanReport` as the
+-    request body instead of a `url` — the frontend already has one sitting
+-    in state the moment the "Download PDF" button is visible. Re-scanning
+-    from just the URL was rejected: a live site can change between the two
+-    requests, so the PDF could show different findings than the report the
+-    user is actually looking at. This way, what downloads is guaranteed to
+-    match what's on screen.
+-
+-    Prefer `GET /scans/{id}/export/pdf` — it also includes cached AI fixes,
+-    which this alias (no scan_id, just a bare report) has no way to look up.
+-    """
+-    pdf_bytes = await generate_pdf(report)
+-
+-    host = urlparse(report.url).netloc or "report"
+-    slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
+-
+-    return Response(
+-        content=pdf_bytes,
+-        media_type="application/pdf",
+-        headers={"Content-Disposition": f'attachment; filename="sentinels-{slug}.pdf"'},
+-    )
++    # Compatibility body supplies only an ID; all printable data is reloaded.
++    return await scan_export(report.id, 'pdf', user)
++
++# Mount only after ownership prerequisites and their route-walking tests pass.
++app.include_router(usage_router)

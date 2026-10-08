@@ -15,9 +15,16 @@
    the time `done` arrives, so the new page can fetch it immediately from
    `GET /scans/{id}` — hard-refresh works. */
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { streamScan, streamRepoScan, type AgentResult, type TargetType } from "@/lib/api";
+import {
+  streamScan,
+  streamRepoScan,
+  type AgentResult,
+  type ScanStreamHandlers,
+  type TargetType,
+} from "@/lib/api";
+import { UsageBadge } from "@/components/UsageBadge";
 import { ScanProgress } from "@/components/ScanProgress";
 
 type ScanLauncherProps = {
@@ -49,6 +56,8 @@ export function ScanLauncher({
   targetType = "url",
 }: ScanLauncherProps) {
   const router = useRouter();
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
   const [url, setUrl] = useState("");
   // A website scan sends requests to someone's site, so the person has to say
   // they may test it. The backend enforces this and records it; the checkbox
@@ -56,6 +65,7 @@ export function ScanLauncher({
   const [permission, setPermission] = useState(false);
   const needsPermission = targetType === "url";
   const [isScanning, setIsScanning] = useState(false);
+  const [isWaking, setIsWaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Filled in one at a time as each "agent" SSE event arrives — this is what
   // makes the waiting state below real instead of a generic pulse.
@@ -71,9 +81,11 @@ export function ScanLauncher({
     setError(null);
     setAgentResults({});
     setIsScanning(true);
+    setIsWaking(false);
 
-    const stream = targetType === "repo" ? streamRepoScan : streamScan;
-    stream(url, {
+    const handlers: ScanStreamHandlers = {
+      onWaking: () => setIsWaking(true),
+      onReady: () => setIsWaking(false),
       onAgent: (result) => {
         setAgentResults((prev) => ({ ...prev, [result.agent]: result }));
       },
@@ -82,10 +94,18 @@ export function ScanLauncher({
         router.push(`/scan/${finishedReport.id}`);
       },
       onError: (message) => {
+        setIsWaking(false);
         setError(message);
         setIsScanning(false);
       },
-    });
+    };
+    // Only a website scan carries the "I may test this site" confirmation.
+    // Passing it explicitly matters: the stream defaults it to false, and the
+    // backend refuses a website scan without it.
+    stop.current =
+      targetType === "repo"
+        ? streamRepoScan(url, handlers)
+        : streamScan(url, handlers, permission);
   }
 
   return (
@@ -152,7 +172,10 @@ export function ScanLauncher({
         )}
       </form>
 
-      {isScanning && <ScanProgress agentResults={agentResults} targetType={targetType} />}
+      <UsageBadge kind={targetType === "repo" ? "repo_scan" : "url_scan"} />
+
+      {isWaking && <p role="status" className="mt-8 animate-pulse text-sm text-muted">Waking up the scanner…</p>}
+      {isScanning && !isWaking && <ScanProgress agentResults={agentResults} targetType={targetType} />}
 
       {error && (
         <div className="mt-10 border-l-2 border-critical pl-4">

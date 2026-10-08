@@ -18,10 +18,12 @@ import type { AgentInfo, AgentResult, SubdomainEntry } from "@/lib/api";
 import { FindingRow } from "@/components/FindingRow";
 import { SubdomainTable } from "@/components/SubdomainTable";
 import { isProblem } from "@/lib/findings";
+import { CoveragePanel } from "@/components/CoveragePanel";
 
-function getVerdict(result: AgentResult): "clean" | "issues_found" | "failed" {
+function getVerdict(result: AgentResult): "clean" | "issues_found" | "failed" | "incomplete" {
   if (result.error) return "failed";
   if (result.findings.some(isProblem)) return "issues_found";
+  if (result.coverage_status !== "completed") return "incomplete";
   return "clean";
 }
 
@@ -29,6 +31,7 @@ const VERDICT_LABEL: Record<string, string> = {
   clean: "Clean",
   issues_found: "Issues found",
   failed: "Failed",
+  incomplete: "Incomplete",
 };
 
 export default function AgentPage() {
@@ -224,7 +227,7 @@ export default function AgentPage() {
               Issues
             </h2>
             <p className="mt-4 text-sm text-muted sm:text-base">
-              Every check passed here — nothing to fix.
+              No issues observed within completed checks. Review coverage below for limitations.
             </p>
           </section>
         )
@@ -256,6 +259,7 @@ export default function AgentPage() {
           </div>
         </section>
       )}
+      <CoveragePanel agents={[result]} />
     </article>
   );
 }

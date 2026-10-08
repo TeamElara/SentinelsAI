@@ -35,7 +35,7 @@ from checklist.repo_rules import REPO_RULES
 from models import AgentResult, RepoFileEntry, ScanReport
 from repo.fetch import parse_github_url, fetch_repo
 from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
-from scoring import calculate_score, count_by_severity, grade_for_score
+from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
 # R12: guesses a file-tree badge language from its extension. Deliberately a
@@ -83,9 +83,13 @@ async def _finalize(
 
     score = calculate_score(findings, raw_url)
     grade = grade_for_score(score)
-    summary = await summarize(raw_url, score, grade, findings, target_type="repo")
+    from scan_coverage import notice
+    coverage_notice = notice(agent_results)
+    summary = await summarize(raw_url, score, grade, findings, target_type="repo", coverage_notice=coverage_notice)
+    if coverage_notice:
+        summary = coverage_notice + (" " + summary if summary else "")
 
-    checklist = evaluate(findings, rules=REPO_RULES)
+    checklist = evaluate(findings, rules=REPO_RULES, agent_results=agent_results)
     readiness_score, deployment_status = compute_readiness(checklist, rules=REPO_RULES)
 
     report = ScanReport(
@@ -96,6 +100,7 @@ async def _finalize(
         duration_ms=duration_ms,
         score=score,
         grade=grade,
+        scorer_version=SCORER_VERSION,
         summary=summary,
         counts=count_by_severity(findings),
         findings=findings,

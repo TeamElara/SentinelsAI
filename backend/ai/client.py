@@ -8,8 +8,11 @@ failure; the caller degrades gracefully, never raises to the scan.
 from __future__ import annotations
 
 import os
+import asyncio
 
 import httpx
+from fastapi import HTTPException
+from usage import reserve_global_ai
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -29,6 +32,7 @@ async def call_groq(
     max_tokens: int = 800,
     reasoning_effort: str = "low",
     model: str = DEFAULT_MODEL,
+    interactive: bool = False,
 ) -> str | None:
     """Call the Groq chat-completions endpoint and return the content string.
 
@@ -38,6 +42,15 @@ async def call_groq(
     """
     api_key = get_api_key()
     if not api_key:
+        return None
+
+    # Count actual provider attempts across summaries, fixes and chat. Never
+    # refund this cost ceiling: even a failed request can consume provider quota.
+    try:
+        await asyncio.to_thread(reserve_global_ai)
+    except HTTPException:
+        if interactive:
+            raise
         return None
 
     try:

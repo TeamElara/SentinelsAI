@@ -253,6 +253,17 @@ def _checklist_html(checklist: list[ChecklistItem]) -> str:
     </section>"""
 
 
+def _coverage_html(report: ScanReport) -> str:
+    rows = []
+    if report.provisional:
+        rows.append("<p>Incomplete or unrecorded coverage. Score and grade are provisional; deployment readiness is unknown.</p>")
+    for agent in report.agents:
+        rows.append(f"<h3>{escape(agent.agent)}: {escape(agent.coverage_status)}</h3>")
+        for check in agent.coverage:
+            rows.append(f'<p style="font-size:11px;line-height:1.5;word-break:break-word;">{escape(check.check)}: <strong>{escape(check.status)}</strong> &mdash; {escape(check.reason)}</p>')
+    return '<section style="margin-top:32px;"><h2>Check coverage</h2>' + ''.join(rows) + '</section>'
+
+
 def render_html(
     report: ScanReport, fixes: Optional[dict[str, FixSuggestion]] = None
 ) -> str:
@@ -300,7 +311,7 @@ def render_html(
     problem_count = sum(len(problems) for _, problems, _ in groups)
 
     if problem_count == 0:
-        findings_html = '<p style="margin-top:16px;font-size:18px;">Every check passed. Nothing to report.</p>'
+        findings_html = '<p style="margin-top:16px;font-size:18px;">No issues observed within completed checks. See coverage for limitations.</p>'
     else:
         sections = []
         for category, problems, passed in groups:
@@ -341,11 +352,12 @@ def render_html(
     {_score_ring_svg(report.score, report.grade)}
     <div style="min-width:0;flex:1;">
       <p style="{_LABEL}">Inspection record</p>
+      {'<p>Provisional score and grade — incomplete coverage</p>' if report.provisional else ''}
       <p style="margin:10px 0 0;font-family:{_MONO_FONT};font-size:16px;word-break:break-all;">
         {escape(report.url)}
       </p>
       <p style="margin:6px 0 0;font-family:{_MONO_FONT};font-size:11px;color:{_MUTED};">
-        {escape(report.scanned_at)} &middot; {report.duration_ms}ms
+        {escape(report.scanned_at)} &middot; {report.duration_ms}ms &middot; Scorer: {escape(report.scorer_version)}
       </p>
       <div style="margin-top:20px;display:flex;flex-wrap:wrap;">{counts_html}</div>
     </div>
@@ -353,6 +365,7 @@ def render_html(
   </header>
 
   {summary_html}
+  {_coverage_html(report)}
 
   <section style="margin-top:48px;">
     <h2 style="{_LABEL}">Findings</h2>
