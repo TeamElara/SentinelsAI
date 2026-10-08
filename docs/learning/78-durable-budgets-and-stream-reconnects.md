@@ -57,6 +57,10 @@ only the subscriber; the bounded job stays alive so reconnect can join it.
 Adapt that regression test to assert no duplicate runner and eventual cleanup.
 After A6's checkbox lands, pass its actual boolean as the third argument to
 `streamScan`; C7's default is false and never invents a permission confirmation.
+`integration/c7-permission-ui.patch` prepares that call. The generator accepts
+`--frontend-source frontend/components/ScanLauncher.tsx --frontend-output
+integration/c7-permission-ui.patch` and refuses a launcher without A6's checkbox.
+PDF budget errors now retain the server's specific message on the report page.
 
 ## Evidence and remaining live checks
 

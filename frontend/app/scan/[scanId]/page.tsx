@@ -180,8 +180,8 @@ export default function ScanPage() {
     setExportError(null);
     try {
       await downloadReportPdf(report);
-    } catch {
-      setExportError("Couldn't generate the PDF. Try again.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Couldn't generate the PDF. Try again.");
     } finally {
       setIsExporting(false);
     }

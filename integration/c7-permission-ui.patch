@@ -1,0 +1,11 @@
+--- a/frontend/components/ScanLauncher.tsx
++++ b/frontend/components/ScanLauncher.tsx
+@@ -85,7 +85,7 @@
+         setError(message);
+         setIsScanning(false);
+       },
+-    });
++    }, permission);
+   }
+ 
+   return (
