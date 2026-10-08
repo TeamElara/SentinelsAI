@@ -79,6 +79,14 @@ Vercel → New Project → import this repo → set **Root Directory** to
   `github.com/settings/apps/<slug>` → Permissions & events first, then
   reinstall/accept the upgrade; there is nothing to configure per-installation
   until the App is requesting something.
+- Webhook (so an uninstall on GitHub shows up in Sentinels): on the App's
+  settings page tick **Active** under Webhook, set the **Webhook URL** to
+  `https://<your-vercel-domain>/api/github/webhook` (the frontend rewrites
+  `/api/*` to Render), set a **Webhook secret**, put the same value in
+  `GITHUB_APP_WEBHOOK_SECRET` on Render, and under Permissions & events →
+  Subscribe to events tick **Installation**. In GitHub's "Recent deliveries" a
+  working setup shows 200; a 401 means the secret doesn't match, a 503 means
+  `GITHUB_APP_WEBHOOK_SECRET` isn't set on Render.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

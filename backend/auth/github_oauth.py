@@ -216,3 +216,9 @@ async def fetch_identity(access_token: str) -> GitHubIdentity | None:
         login=login,
         avatar_url=avatar if isinstance(avatar, str) else None,
     )
+
+
+def get_webhook_secret() -> str | None:
+    """The secret GitHub signs webhook deliveries with, set on the App's
+    settings page. Without it no delivery can be verified, so none is read."""
+    return os.environ.get("GITHUB_APP_WEBHOOK_SECRET") or None

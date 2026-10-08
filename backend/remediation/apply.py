@@ -48,8 +48,8 @@ from remediation.github import GitHubWriteError, GitHubWriter, commit_files
 from remediation.linking import repo_target
 from remediation.patch import PlanValidationError, validate_plan
 from remediation.source import get_file, resolve_ref_sha
-from remediation.tokens import TokenError, TokenProvider, default_provider
-from storage.installations import active_installation_for
+from remediation.tokens import InstallationGone, TokenError, TokenProvider, default_provider
+from storage.installations import active_installation_for, revoke_installation_everywhere
 from storage.scans import scan_owner
 from storage.remediation import (
     active_fix_applications,
@@ -297,6 +297,16 @@ async def apply_fixes(
     async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             installation_token = await provider.token_for(client, installation.installation_id)
+        except InstallationGone as exc:
+            # GitHub is the authority on whether the App is still installed.
+            # Stop using the grant now rather than failing the same way on
+            # every later attempt, until the user installs the App again.
+            revoke_installation_everywhere(installation.installation_id)
+            raise ApplyError(
+                f"The Sentinels App was uninstalled from {owner} on GitHub. "
+                "Install it again from Settings, then try again.",
+                status=409,
+            ) from exc
         except TokenError as exc:
             raise ApplyError(str(exc), status=502) from exc
 
