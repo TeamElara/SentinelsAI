@@ -79,7 +79,6 @@ from remediation.registry import fixable_findings  # noqa: E402
 from remediation.tokens import fetch_installation  # noqa: E402
 from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
-from report.pdf import generate_pdf  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
@@ -1048,31 +1047,4 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
         headers={
             "Content-Disposition": f'attachment; filename="sentinels-{slug}.{exporter.extension}"'
         },
-    )
-
-
-@app.post("/scan/pdf")
-async def scan_pdf(report: ScanReport, user: User = Depends(current_user)) -> Response:
-    """Deprecated alias — kept through M17 per PLAN-v2.md, then removed.
-
-    Prints a *finished* report to PDF, taking the whole `ScanReport` as the
-    request body instead of a `url` — the frontend already has one sitting
-    in state the moment the "Download PDF" button is visible. Re-scanning
-    from just the URL was rejected: a live site can change between the two
-    requests, so the PDF could show different findings than the report the
-    user is actually looking at. This way, what downloads is guaranteed to
-    match what's on screen.
-
-    Prefer `GET /scans/{id}/export/pdf` — it also includes cached AI fixes,
-    which this alias (no scan_id, just a bare report) has no way to look up.
-    """
-    pdf_bytes = await generate_pdf(report)
-
-    host = urlparse(report.url).netloc or "report"
-    slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="sentinels-{slug}.pdf"'},
     )

@@ -857,17 +857,16 @@ export async function fetchChatHistory(scanId: string): Promise<ChatMessage[]> {
 }
 
 /**
- * POST the report already sitting in this page's state to `POST /scan/pdf`
- * and save the PDF it comes back with. No re-scan involved — the backend
- * prints exactly the report handed to it, so the file always matches what's
- * on screen (see the endpoint's docstring in `backend/main.py`).
+ * Download the stored report as a PDF from `GET /scans/{id}/export/pdf`. The
+ * backend prints its own stored copy of the scan, never a report sent by the
+ * browser, so only the scan's owner can get one — and a scan is immutable
+ * once saved, so the file matches what's on screen.
  */
 export async function downloadReportPdf(report: ScanReport): Promise<void> {
-  const response = await fetch(`${API_BASE}/scan/pdf`, withAuth({
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(report),
-  }));
+  const response = await fetch(
+    `${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`,
+    withAuth(),
+  );
   checkAuth(response);
 
   if (!response.ok) {

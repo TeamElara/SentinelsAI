@@ -180,3 +180,58 @@ def test_a_scan_started_from_sentinels_itself_goes_ahead(client, stream_spy, pat
 
     assert res.status_code == 200
     assert stream_spy == {"scans": 1, "rate_limit": 1}
+
+
+# --- PDF export (Launch Plan A4) --------------------------------------------
+
+
+def test_the_report_body_pdf_route_is_gone(client):
+    _, cookie = _signed_in_cookie(1, "alice")
+    client.cookies.set("sentinels_session", cookie)
+
+    res = client.post("/scan/pdf", json={})
+
+    assert res.status_code in (404, 405)
+
+
+def test_the_owner_gets_a_pdf_of_the_stored_scan(client, monkeypatch):
+    import report.pdf as pdf_module
+
+    seen = []
+
+    async def fake_generate(report, fixes=None):
+        seen.append(report.id)
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(pdf_module, "generate_pdf", fake_generate)
+    alice, cookie = _signed_in_cookie(1, "alice")
+    _save_url_scan(SCAN_ID, alice.id)
+    client.cookies.set("sentinels_session", cookie)
+
+    res = client.get(f"/scans/{SCAN_ID}/export/pdf")
+
+    assert res.status_code == 200
+    assert res.content == b"%PDF-fake"
+    assert res.headers["content-type"] == "application/pdf"
+    assert seen == [SCAN_ID]
+
+
+def test_another_user_never_reaches_the_pdf_renderer(client, monkeypatch):
+    import report.pdf as pdf_module
+
+    seen = []
+
+    async def fake_generate(report, fixes=None):
+        seen.append(report.id)
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(pdf_module, "generate_pdf", fake_generate)
+    alice, _ = _signed_in_cookie(1, "alice")
+    _, bob_cookie = _signed_in_cookie(2, "bob")
+    _save_url_scan(SCAN_ID, alice.id)
+    client.cookies.set("sentinels_session", bob_cookie)
+
+    res = client.get(f"/scans/{SCAN_ID}/export/pdf")
+
+    assert res.status_code == 404
+    assert seen == []

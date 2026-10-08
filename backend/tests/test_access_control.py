@@ -56,7 +56,6 @@ SIGNED_IN = {
     ("GET", "/scan/stream"),
     ("GET", "/repo/stream"),
     ("GET", "/scans"),
-    ("POST", "/scan/pdf"),
 }
 
 # Values for path parameters other than `scan_id`. `format_id` has to be a
