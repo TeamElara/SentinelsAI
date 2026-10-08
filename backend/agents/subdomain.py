@@ -44,7 +44,7 @@ from agents.probe import Budget, safe_get
 from agents.takeover_signatures import match_provider
 from agents.tls import fetch_certificate
 from models import EvidenceKind, Finding, Severity, Status, SubdomainEntry
-from net.policy import BlockedTarget, resolve_and_check
+from net.policy import DNS_LIFETIME_SECONDS, DNS_TIMEOUT_SECONDS, BlockedTarget, resolve_and_check
 
 OWASP_MISCONFIG = "A05:2021 - Security Misconfiguration"
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
@@ -78,6 +78,10 @@ _DNS_RESOLVERS = ["8.8.8.8", "1.1.1.1"]
 def _make_resolver() -> dns.resolver.Resolver:
     resolver = dns.resolver.Resolver(configure=False)
     resolver.nameservers = _DNS_RESOLVERS
+    # These lookups run on a worker thread, which can't be cancelled — the
+    # limit on the lookup itself is the only thing that ends a slow one.
+    resolver.timeout = DNS_TIMEOUT_SECONDS
+    resolver.lifetime = DNS_LIFETIME_SECONDS
     return resolver
 
 

@@ -54,12 +54,19 @@ class Loopback(httpcore.AsyncNetworkBackend):
         await self._real.sleep(seconds)
 
 
-async def start_server(routes: dict[str, bytes], ssl_context: ssl.SSLContext | None = None):
-    """Serve fixed raw HTTP responses by path; anything else is a 404."""
+async def start_server(
+    routes: dict[str, bytes],
+    ssl_context: ssl.SSLContext | None = None,
+    heads: list[bytes] | None = None,
+):
+    """Serve fixed raw HTTP responses by path; anything else is a 404.
+    Each request's head (request line + headers) is appended to `heads`."""
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             head = await reader.readuntil(b"\r\n\r\n")
+            if heads is not None:
+                heads.append(head)
             path = head.split(b" ", 2)[1].decode()
             writer.write(routes.get(path, b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
             await writer.drain()

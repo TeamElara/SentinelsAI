@@ -22,6 +22,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import datetime, timezone
 
 import httpx
@@ -33,6 +34,7 @@ from checklist.evaluator import compute_readiness, evaluate
 from checklist.repo_rules import REPO_RULES
 from models import AgentResult, RepoFileEntry, ScanReport
 from repo.fetch import parse_github_url, fetch_repo
+from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
 from scoring import calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
@@ -137,21 +139,24 @@ async def run_repo_scan(raw_url: str, user_id: int | None = None) -> ScanReport:
     """
     owner, repo, ref = parse_github_url(raw_url)
     start = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + SCAN_DEADLINE_SECONDS
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        async with fetch_repo(owner, repo, ref, client) as fetched:
-            context = RepoContext(
-                repo_url=raw_url,
-                owner=owner,
-                repo=repo,
-                ref=fetched.ref,
-                root=fetched.root,
-                files=list_repo_files(fetched.root),
-                client=client,
-            )
-            agent_results: list[AgentResult] = list(
-                await asyncio.gather(*(agent_cls().run(context) for agent_cls in AGENTS_REPO))
-            )
+    with scan_slots.hold(user_id):
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            async with fetch_repo(owner, repo, ref, client) as fetched:
+                context = RepoContext(
+                    repo_url=raw_url,
+                    owner=owner,
+                    repo=repo,
+                    ref=fetched.ref,
+                    root=fetched.root,
+                    files=list_repo_files(fetched.root),
+                    client=client,
+                )
+                runs = [(agent_cls.name, agent_cls().run(context)) for agent_cls in AGENTS_REPO]
+                async with aclosing(run_with_deadline(runs, deadline)) as results:
+                    by_agent = {result.agent: result async for result in results}
+                agent_results: list[AgentResult] = [by_agent[agent_cls.name] for agent_cls in AGENTS_REPO]
 
     return await _finalize(raw_url, start, agent_results, context.files, user_id)
 
@@ -176,24 +181,26 @@ async def run_repo_scan_stream(
     """
     owner, repo, ref = parse_github_url(raw_url)
     start = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + SCAN_DEADLINE_SECONDS
     agent_results: list[AgentResult] = []
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        async with fetch_repo(owner, repo, ref, client) as fetched:
-            context = RepoContext(
-                repo_url=raw_url,
-                owner=owner,
-                repo=repo,
-                ref=fetched.ref,
-                root=fetched.root,
-                files=list_repo_files(fetched.root),
-                client=client,
-            )
-            coros = [agent_cls().run(context) for agent_cls in AGENTS_REPO]
-            for coro in asyncio.as_completed(coros):
-                result = await coro
-                agent_results.append(result)
-                yield ("agent", result)
+    with scan_slots.hold(user_id):
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            async with fetch_repo(owner, repo, ref, client) as fetched:
+                context = RepoContext(
+                    repo_url=raw_url,
+                    owner=owner,
+                    repo=repo,
+                    ref=fetched.ref,
+                    root=fetched.root,
+                    files=list_repo_files(fetched.root),
+                    client=client,
+                )
+                runs = [(agent_cls.name, agent_cls().run(context)) for agent_cls in AGENTS_REPO]
+                async with aclosing(run_with_deadline(runs, deadline)) as results:
+                    async for result in results:
+                        agent_results.append(result)
+                        yield ("agent", result)
 
     report = await _finalize(raw_url, start, agent_results, context.files, user_id)
     yield ("done", report)

@@ -15,6 +15,10 @@ closes the gap by doing the check where the connection is made:
   before it is sent. httpx sends each redirect hop through the transport as
   a new request, so this covers every URL in a redirect chain, not only the
   first.
+- Response bodies are read as a stream and cut off at `MAX_BODY_BYTES`. A
+  scan needs headers and the start of a page, not a 4 GB download, and the
+  limit applies to the *decompressed* size so a small gzip response can't
+  expand into gigabytes in memory.
 - The client is built with `trust_env=False`. Otherwise httpx reads
   `HTTP_PROXY`/`HTTPS_PROXY` and connects to the proxy instead, and the
   proxy — not this code — would decide where the request ends up.
@@ -22,7 +26,8 @@ closes the gap by doing the check where the connection is made:
 from __future__ import annotations
 
 import ssl
-from typing import Any, Iterable
+import zlib
+from typing import Any, AsyncIterator, Iterable
 
 import httpcore
 import httpx
@@ -36,6 +41,14 @@ from net.policy import (
     parse_ip_literal,
     resolve_and_check,
 )
+
+
+# About 2 MB. Every agent reads whole bodies into memory, several at once.
+MAX_BODY_BYTES = 2 * 1024 * 1024
+
+# What a scan asks servers for. Only encodings `_CappedStream` can decode
+# itself with a size limit; httpx's own decoders have none.
+_ACCEPT_ENCODING = "gzip, deflate"
 
 
 class BlockedRequest(httpx.ConnectError):
@@ -120,8 +133,100 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
         await self._inner.sleep(seconds)
 
 
+class _CappedStream(httpx.AsyncByteStream):
+    """A response body that ends after `limit` bytes of (decoded) content.
+
+    With `encoding` set it also does the gzip/deflate decoding, because the
+    limit has to count what comes *out* of the decompressor: zlib can be
+    told "give me at most N bytes", httpx's decoders can't.
+    """
+
+    def __init__(self, stream: httpx.AsyncByteStream, limit: int, encoding: str | None = None) -> None:
+        self._stream = stream
+        self._limit = limit
+        self._encoding = encoding
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        remaining = self._limit
+        decoder = None
+        if self._encoding in ("gzip", "x-gzip"):
+            decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+        elif self._encoding == "deflate":
+            decoder = zlib.decompressobj()
+        first = True
+
+        async for chunk in self._stream:
+            if decoder is not None:
+                try:
+                    data = decoder.decompress(chunk, remaining)
+                except zlib.error:
+                    if not (first and self._encoding == "deflate"):
+                        return  # corrupt body: what was decoded so far is the body
+                    # Some servers send raw deflate without the zlib header.
+                    decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+                    try:
+                        data = decoder.decompress(chunk, remaining)
+                    except zlib.error:
+                        return
+            else:
+                data = chunk[:remaining]
+            first = False
+            if data:
+                remaining -= len(data)
+                yield data
+            if remaining <= 0:
+                return
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+class _EmptyStream(httpx.AsyncByteStream):
+    """No body at all, for a response in an encoding that can't be capped."""
+
+    def __init__(self, stream: httpx.AsyncByteStream) -> None:
+        self._stream = stream
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        return
+        yield b""  # pragma: no cover - makes this an async generator
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+def cap_response(response: httpx.Response, limit: int = MAX_BODY_BYTES) -> httpx.Response:
+    """Return `response` with its body limited to `limit` decoded bytes.
+
+    Status and headers are untouched except where they'd now be wrong:
+    once the body is decoded here, `Content-Encoding` and `Content-Length`
+    no longer describe what the caller will read.
+    """
+    headers = response.headers.copy()
+    encoding = headers.get("content-encoding", "identity").strip().lower()
+    stream = response.stream
+
+    if encoding in ("", "identity"):
+        capped: httpx.AsyncByteStream = _CappedStream(stream, limit)
+    else:
+        del headers["content-encoding"]
+        headers.pop("content-length", None)
+        if encoding in ("gzip", "x-gzip", "deflate"):
+            capped = _CappedStream(stream, limit, encoding)
+        else:
+            # Not something we asked for (br, zstd, stacked encodings).
+            capped = _EmptyStream(stream)
+
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        stream=capped,
+        extensions=response.extensions,
+    )
+
+
 class PolicyTransport(httpx.AsyncBaseTransport):
-    """Checks each request's URL, then sends it through `inner`."""
+    """Checks each request's URL, sends it through `inner`, caps the body."""
 
     def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
         self._inner = inner
@@ -137,8 +242,9 @@ class PolicyTransport(httpx.AsyncBaseTransport):
         except BlockedTarget as exc:
             raise BlockedRequest(exc.reason, request=request) from None
 
+        request.headers["accept-encoding"] = _ACCEPT_ENCODING
         try:
-            return await self._inner.handle_async_request(request)
+            return cap_response(await self._inner.handle_async_request(request))
         except httpx.ConnectError as exc:
             if isinstance(exc.__cause__, _BlockedConnect):
                 raise BlockedRequest(exc.__cause__.reason, request=request) from None

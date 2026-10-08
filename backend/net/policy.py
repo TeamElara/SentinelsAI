@@ -26,8 +26,18 @@ import socket
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit
 
+import dns.asyncresolver
+import dns.exception
+import dns.resolver
+
 ALLOWED_SCHEMES = {"http": 80, "https": 443}
 ALLOWED_PORTS = frozenset(ALLOWED_SCHEMES.values())
+
+# One DNS query may wait this long for a nameserver, and one whole lookup
+# (retries and all) this long in total.
+DNS_TIMEOUT_SECONDS = 2.0
+DNS_LIFETIME_SECONDS = 5.0
+_FALLBACK_NAMESERVERS = ["8.8.8.8", "1.1.1.1"]
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -176,24 +186,60 @@ _NOT_PUBLIC = (
 )
 
 
-async def system_resolver(host: str) -> list[str]:
-    """Resolve `host` to all of its A and AAAA addresses via the OS resolver."""
-    loop = asyncio.get_running_loop()
+def _dns_resolver(cls):
+    """A dnspython resolver with a hard limit on how long one lookup may take."""
     try:
-        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except (socket.gaierror, UnicodeError):
-        return []
-    # Order-preserving dedupe: getaddrinfo can repeat an address per socket type.
-    return list(dict.fromkeys(info[4][0] for info in infos))
+        resolver = cls()
+    except dns.resolver.NoResolverConfiguration:
+        resolver = cls(configure=False)
+        resolver.nameservers = _FALLBACK_NAMESERVERS
+    resolver.timeout = DNS_TIMEOUT_SECONDS
+    resolver.lifetime = DNS_LIFETIME_SECONDS
+    return resolver
+
+
+def _addresses(answers) -> list[str]:
+    found: list[str] = []
+    for answer in answers:
+        # A failed lookup for one record type (no AAAA record, a timeout)
+        # is just no addresses of that type.
+        if isinstance(answer, BaseException):
+            continue
+        found.extend(record.address for record in answer)
+    return list(dict.fromkeys(found))
+
+
+async def system_resolver(host: str) -> list[str]:
+    """Resolve `host` to all of its A and AAAA addresses.
+
+    Uses dnspython rather than `getaddrinfo`: `getaddrinfo` has no timeout
+    and runs on a worker thread that can't be cancelled, so one slow
+    nameserver could hold a thread for as long as the OS felt like. Here a
+    lookup ends after `DNS_LIFETIME_SECONDS`, on the event loop, and can be
+    cancelled with the scan. Since connections go to the addresses returned
+    here, it doesn't matter that the OS resolver might have answered
+    differently.
+    """
+    resolver = _dns_resolver(dns.asyncresolver.Resolver)
+    answers = await asyncio.gather(
+        resolver.resolve(host, "A"), resolver.resolve(host, "AAAA"), return_exceptions=True
+    )
+    for answer in answers:
+        if isinstance(answer, asyncio.CancelledError):
+            raise answer
+    return _addresses(answers)
 
 
 def system_resolver_sync(host: str) -> list[str]:
     """Blocking twin of `system_resolver`, for code already on a worker thread."""
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except (socket.gaierror, UnicodeError):
-        return []
-    return list(dict.fromkeys(info[4][0] for info in infos))
+    resolver = _dns_resolver(dns.resolver.Resolver)
+    answers = []
+    for record_type in ("A", "AAAA"):
+        try:
+            answers.append(resolver.resolve(host, record_type))
+        except dns.exception.DNSException as exc:
+            answers.append(exc)
+    return _addresses(answers)
 
 
 def _vet_without_dns(host: str) -> tuple[str, list[str] | None]:
