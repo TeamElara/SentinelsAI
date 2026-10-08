@@ -11,6 +11,9 @@ from urllib.parse import urlsplit
 
 from models import Finding, Severity, Status, SEVERITY_PENALTY
 
+# Persist this alongside a score; bump whenever scoring semantics change.
+SCORER_VERSION = "canonical-v2"
+
 # Score -> grade cutoffs, checked highest-first. A fixed table, not a formula,
 # so "why did this get a B" always has a one-line answer: the score, and this
 # table.

@@ -100,6 +100,7 @@ export interface ChecklistItem {
 }
 
 export interface ScanReport {
+  scorer_version: string;
   id: string;                             // uuid4, set once the scan is persisted
   url: string;                            // a repo scan's "URL" is its GitHub URL -- same field
   target_type: TargetType;
@@ -570,6 +571,9 @@ export type FixApplicationState =
 // Mirrors `VerificationResult` (Stage C). Every number here came from re-running
 // one agent against the repo and calling the same deterministic scorer twice.
 export interface VerificationResult {
+  scorer_version: string;
+  stored_scorer_version: string;
+  stored_score: number | null;
   scan_id: string;
   finding_key: string;
   agent: string;

@@ -58,6 +58,7 @@ class MarkdownExporter:
             f"# Sentinels report — {report.url}",
             "",
             f"**Score:** {report.score}/100 (grade {report.grade})  ",
+            f"**Scorer:** {report.scorer_version}",
             f"**Scanned:** {report.scanned_at} · {report.duration_ms}ms",
         ]
         if report.deployment_status and report.readiness_score is not None:

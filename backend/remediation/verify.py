@@ -43,7 +43,7 @@ from remediation.apply import refresh_applications
 from remediation.headers_fix import FIXABLE_FINDING_IDS as _LINK_REPO_VERIFIABLE_IDS
 from remediation.tokens import TokenError, TokenProvider, default_provider
 from repo.fetch import fetch_repo, parse_github_url
-from scoring import calculate_score
+from scoring import SCORER_VERSION, calculate_score
 from storage.installations import active_installation_for
 from storage.remediation import active_fix_applications, save_verification, write_audit
 from storage.scans import scan_owner
@@ -308,6 +308,9 @@ async def verify_finding(
         before=before,
         after=after,
         delta=after - before,
+        scorer_version=SCORER_VERSION,
+        stored_scorer_version=report.scorer_version,
+        stored_score=report.score,
         target_fixed=finding_key not in still,
         fixed=sorted(was_failing - still),
         still_failing=sorted(was_failing & still),

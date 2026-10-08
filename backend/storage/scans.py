@@ -100,7 +100,7 @@ def list_scans(limit: int = 20, offset: int = 0, user_id: int | None = None) -> 
         rows = conn.execute(
             f"""
             SELECT id, url, target_type, score, grade, scanned_at, duration_ms, summary,
-                   readiness_score, deployment_status
+                   readiness_score, deployment_status, scorer_version
             FROM scans
             {where}
             ORDER BY created_at DESC
@@ -115,6 +115,7 @@ def list_scans(limit: int = 20, offset: int = 0, user_id: int | None = None) -> 
                 target_type=row["target_type"],
                 score=row["score"],
                 grade=row["grade"],
+                scorer_version=row["scorer_version"],
                 scanned_at=row["scanned_at"],
                 duration_ms=row["duration_ms"],
                 summary=row["summary"] or "",
@@ -198,6 +199,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
             duration_ms=scan_row["duration_ms"],
             score=scan_row["score"],
             grade=scan_row["grade"],
+            scorer_version=scan_row["scorer_version"],
             summary=scan_row["summary"] or "",
             counts=counts,
             findings=all_findings,
@@ -243,9 +245,9 @@ def save_scan(
             """
             INSERT INTO scans (
                 id, url, target_type, scanned_at, duration_ms, score, grade,
-                summary, readiness_score, deployment_status, created_at, user_id
+                summary, readiness_score, deployment_status, created_at, user_id, scorer_version
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.id,
@@ -260,6 +262,7 @@ def save_scan(
                 report.deployment_status,
                 datetime.now(timezone.utc).isoformat(),
                 user_id,
+                report.scorer_version,
             ),
         )
         save_agent_results(conn, report.id, report.agents)

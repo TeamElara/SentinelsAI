@@ -265,6 +265,7 @@ export default function ScanPage() {
           </p>
           <p className="mt-3 font-mono text-sm text-muted">
             {report.scanned_at} · {report.duration_ms}ms
+            {" · Scorer: "}{report.scorer_version ?? "legacy-v1"}
           </p>
 
           {exportError && (

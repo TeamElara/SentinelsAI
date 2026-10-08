@@ -344,7 +344,12 @@ CREATE TABLE scan_repo_links (
 );
 """
 
-# Each entry is (version, schema sql to apply to go from version-1 to version).
+_V16_SCHEMA = """
+ALTER TABLE scans ADD COLUMN scorer_version TEXT NOT NULL DEFAULT 'legacy-v1';
+"""
+
+# Version 15 is reserved for Track A's users.blocked migration. The ledger
+# below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_SCHEMA),
     (2, _V2_SCHEMA),
@@ -360,6 +365,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (12, _V12_SCHEMA),
     (13, _V13_SCHEMA),
     (14, _V14_SCHEMA),
+    (16, _V16_SCHEMA),
 ]
 
 
@@ -380,21 +386,43 @@ def init_db() -> None:
     gets the ones it's missing, and a fully up-to-date one does nothing."""
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         row = conn.execute("SELECT version FROM schema_version").fetchone()
         current = row["version"] if row is not None else 0
+        ledger_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+        ).fetchone() is not None
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        if not ledger_exists:
+            for version in range(1, current + 1):
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
+        applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
 
-        for version, sql in MIGRATIONS:
-            if version <= current:
+        for version, sql in sorted(MIGRATIONS):
+            if version in applied:
                 continue
-            conn.executescript(sql)
+            # executescript implicitly commits in sqlite3. Execute complete
+            # statements instead, so schema and ledger advance atomically.
+            statement = ""
+            for line in sql.splitlines(keepends=True):
+                statement += line
+                if sqlite3.complete_statement(statement):
+                    conn.execute(statement)
+                    statement = ""
+            if statement.strip():
+                raise ValueError(f"Incomplete SQL in migration {version}")
+            conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (version,))
+            current = max(current, version)
             if row is None:
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (current,))
                 row = True  # sentinel: subsequent iterations should UPDATE, not INSERT
             else:
-                conn.execute("UPDATE schema_version SET version = ?", (version,))
-            current = version
+                conn.execute("UPDATE schema_version SET version = ?", (current,))
 
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

@@ -142,6 +142,7 @@ class ScanReport(BaseModel):
     duration_ms: int
     score: int                           # 0-100
     grade: str                           # A-F
+    scorer_version: str = "legacy-v1"
     summary: str = ""                    # AI-written executive summary
     counts: dict[str, int] = Field(default_factory=dict)  # findings by severity
     findings: list[Finding] = Field(default_factory=list)
@@ -188,6 +189,7 @@ class ScanSummary(BaseModel):
     target_type: Literal["url", "repo"] = "url"
     score: int
     grade: str
+    scorer_version: str = "legacy-v1"
     scanned_at: str
     duration_ms: int
     summary: str = ""
@@ -321,6 +323,9 @@ class VerificationResult(BaseModel):
     before: int                              # score with the stored findings
     after: int                               # score with this agent's fresh findings
     delta: int                               # after - before; positive is an improvement
+    scorer_version: str = "legacy-v1"        # both before/after use this scorer
+    stored_scorer_version: str = "legacy-v1"
+    stored_score: Optional[int] = None        # historical score, never overwritten
 
     target_fixed: bool                       # the verified finding itself: FAIL -> gone
     fixed: list[str] = Field(default_factory=list)          # ids this agent no longer reports

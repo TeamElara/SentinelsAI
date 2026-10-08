@@ -36,7 +36,7 @@ from agents.registry import AGENTS
 from ai.analyst import summarize
 from checklist.evaluator import compute_readiness, evaluate
 from models import AgentResult, ScanReport
-from scoring import calculate_score, count_by_severity, grade_for_score
+from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
 # Matches ANY "word://" prefix (http, https, ftp, javascript, ...) — not just
@@ -135,6 +135,7 @@ async def _finalize(
         duration_ms=duration_ms,
         score=score,
         grade=grade,
+        scorer_version=SCORER_VERSION,
         summary=summary,
         counts=count_by_severity(findings),
         findings=findings,

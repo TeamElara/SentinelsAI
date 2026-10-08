@@ -33,7 +33,7 @@ from checklist.evaluator import compute_readiness, evaluate
 from checklist.repo_rules import REPO_RULES
 from models import AgentResult, RepoFileEntry, ScanReport
 from repo.fetch import parse_github_url, fetch_repo
-from scoring import calculate_score, count_by_severity, grade_for_score
+from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
 # R12: guesses a file-tree badge language from its extension. Deliberately a
@@ -94,6 +94,7 @@ async def _finalize(
         duration_ms=duration_ms,
         score=score,
         grade=grade,
+        scorer_version=SCORER_VERSION,
         summary=summary,
         counts=count_by_severity(findings),
         findings=findings,

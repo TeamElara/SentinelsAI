@@ -345,7 +345,7 @@ def render_html(
         {escape(report.url)}
       </p>
       <p style="margin:6px 0 0;font-family:{_MONO_FONT};font-size:11px;color:{_MUTED};">
-        {escape(report.scanned_at)} &middot; {report.duration_ms}ms
+        {escape(report.scanned_at)} &middot; {report.duration_ms}ms &middot; Scorer: {escape(report.scorer_version)}
       </p>
       <div style="margin-top:20px;display:flex;flex-wrap:wrap;">{counts_html}</div>
     </div>
