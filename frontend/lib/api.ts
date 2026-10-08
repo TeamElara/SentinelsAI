@@ -214,8 +214,8 @@ export interface ScanStreamHandlers {
 }
 
 /** Streaming retries join one server-side job using an unchanged request ID. */
-export function streamScan(url: string, handlers: ScanStreamHandlers): () => void {
-  return startScanStream(API_BASE, '/scan/stream', url, handlers);
+export function streamScan(url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
+  return startScanStream(API_BASE, '/scan/stream', url, handlers, permissionConfirmed);
 }
 
 export function streamRepoScan(url: string, handlers: ScanStreamHandlers): () => void {

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -20,6 +21,15 @@ from models import User
 from rate_limit import enforce_scan_rate_limit
 from storage.scans import get_scan, scan_owner
 from usage import reserve, usage_for
+
+
+def _is_busy(exc):
+    # B4 supplies this type. Keep C7 independently testable before its merge.
+    try:
+        from scan_limits import ScanBusy
+    except ImportError:
+        return False
+    return isinstance(exc, ScanBusy)
 
 router = APIRouter()
 _scan_slots = asyncio.Semaphore(2)
@@ -51,7 +61,10 @@ async def charged(user_id, kind, operation, *, unavailable_none=False):
         else:
             await asyncio.to_thread(reservation.complete)
         raise
-    except ValueError:
+    except ValueError as exc:
+        if _is_busy(exc):
+            await asyncio.to_thread(reservation.refund)
+            raise HTTPException(429, str(exc), headers={'Retry-After': '5'}) from exc
         # A rejected target is a user failure after starting, not a server outage.
         await asyncio.to_thread(reservation.complete)
         raise
@@ -121,16 +134,17 @@ async def _run(job, reservation, runner):
     try:
         async with asyncio.timeout(DEADLINE_SECONDS):
             async with _scan_slots:
-                async for event, data in runner():
-                    if event == 'done':
-                        scan_id = json.loads(data)['id']
-                        await asyncio.to_thread(_finish, reservation.id, scan_id=scan_id)
-                    await job.emit(event, data)
+                async with aclosing(runner()) as events:
+                    async for event, data in events:
+                        if event == 'done':
+                            scan_id = json.loads(data)['id']
+                            await asyncio.to_thread(_finish, reservation.id, scan_id=scan_id)
+                        await job.emit(event, data)
         if not job.done:
             raise RuntimeError('Scan ended without a stored report')
     except BaseException as exc:
         message = str(exc) if isinstance(exc, ValueError) else 'Scanner could not complete this job. Its daily allowance was refunded.'
-        if isinstance(exc, ValueError):
+        if isinstance(exc, ValueError) and not _is_busy(exc):
             await asyncio.to_thread(reservation.complete)
         else:
             await asyncio.shield(asyncio.to_thread(reservation.refund))
