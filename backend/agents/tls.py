@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -50,18 +51,26 @@ def fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, s
     """
     if port not in ALLOWED_PORTS:
         raise BlockedTarget("Only ports 80 and 443 can be scanned.")
+    deadline = time.monotonic() + timeout
     addresses = resolve_and_check_sync(hostname)
 
     context = ssl.create_default_context()
     last_error: OSError | None = None
     for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("TLS connection budget exhausted.")
         try:
-            sock = socket.create_connection((address, port), timeout=timeout)
+            sock = socket.create_connection((address, port), timeout=remaining)
         except OSError as exc:
             # This address is down; another vetted one may not be.
             last_error = exc
             continue
         with sock:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TLS handshake budget exhausted.")
+            sock.settimeout(remaining)
             with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                 return ssock.getpeercert(), ssock.version()
     assert last_error is not None  # resolve_and_check_sync never returns []

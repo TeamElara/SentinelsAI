@@ -78,7 +78,7 @@ from auth.session import (  # noqa: E402
 from db import init_db  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
-from rate_limit import enforce_scan_rate_limit  # noqa: E402
+from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
 from remediation.planning import NotARepoScan, build_bundle_zip, plan_and_save, preview_plan  # noqa: E402
@@ -86,7 +86,6 @@ from remediation.registry import fixable_findings  # noqa: E402
 from remediation.tokens import fetch_installation  # noqa: E402
 from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
-from scan_limits import ScanBusy  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.account import delete_account  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
@@ -652,13 +651,8 @@ async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> S
     the agents it calls.
     """
     require_permission(request.permission_confirmed, user, request.url)
-    enforce_scan_rate_limit(user.id)
     try:
-        return await run_scan(request.url, user_id=user.id)
-    except ScanBusy as exc:
-        # Not the client's mistake and not a server fault: too many scans are
-        # running right now. 429 tells a client to wait and try again.
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
     except ValueError as exc:
         # normalize_url's complaints (empty string, bad scheme, no host) are
         # the client's fault, not the server's — 400, not a 500 crash.
@@ -678,11 +672,8 @@ async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) ->
     independently reachable and verifiable over real HTTP, the same way
     every other milestone in this codebase has been.
     """
-    enforce_scan_rate_limit(user.id)
     try:
-        return await run_repo_scan(request.url, user_id=user.id)
-    except ScanBusy as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        return await scan_operation(user.id, 'repo_scan', lambda: run_repo_scan(request.url, user_id=user.id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -710,14 +701,11 @@ async def _closing(stream):
 
 
 class SseResponse(StreamingResponse):
-    """A streaming response that closes its body generator when it ends.
+    """Close the SSE subscriber when its response ends, including disconnects.
 
-    Starlette doesn't. When the browser disconnects, the response task is
-    cancelled while it is awaiting the socket, and the body generator is left
-    suspended at its `yield` until the garbage collector finalizes it, so the
-    scan behind it would keep running (and keep its scan slot) in the meantime.
-    Closing the generator here raises GeneratorExit inside it at once, which is
-    what lets `_closing` (and the orchestrator's own `finally` blocks) run.
+    C7's bounded job owns the orchestrator independently of this subscriber.
+    The job closes and awaits the orchestrator on completion or deadline;
+    reconnecting subscribes to the same job without a second quota charge.
     """
 
     async def stream_response(self, send) -> None:
@@ -739,55 +727,37 @@ def _sse(event: str, data: str) -> str:
 async def scan_stream(
     url: str,
     request: Request,
+    request_id: str,
     permission_confirmed: bool = False,
     user: User = Depends(current_user),
 ) -> StreamingResponse:
-    """Same scan as `POST /scan`, reported as it happens instead of all at
-    once. Server-Sent Events, not JSON — a one-way, GET-only, plain-text
-    streaming protocol the browser understands natively via `EventSource`,
-    which is why this takes `url` as a query parameter instead of a JSON
-    body the way `POST /scan` does: `EventSource` can only issue GET.
+    """Run or reconnect to an authenticated, bounded SSE scan job.
 
-    Emits one `event: agent` per finished agent (real completion order, not
-    `AGENTS`' declared order), then one `event: done` carrying the complete
-    `ScanReport`. A bad URL can't become a `400` the way it does for
-    `POST /scan` — once the first byte of a streaming response has gone out,
-    the status code (200) is already committed — so it's reported as
-    `event: failed` instead, a message *inside* the otherwise-successful
-    stream.
-
-    `Depends(current_user)` runs — and can 401 — before this function body
-    starts, so an unauthenticated `EventSource` never gets as far as opening
-    the stream. The rate-limit check runs here too, for the same reason: a
-    429 raised before `StreamingResponse` is constructed is a normal HTTP
-    error response; raised from inside `events()` it would just be another
-    in-band SSE message after a 200 already went out.
-
-    The cross-site check runs before the rate limiter, so a refused request
-    never uses up any of the user's scans.
+    The fetch-based client supplies one canonical UUID request_id across
+    reconnects. Account, operation and target are bound to that reservation.
+    Permission and cross-site guards precede quota reservation. Agents arrive
+    in completion order, followed by the stored report or a failure message.
+    Daily exhaustion is an HTTP 429 before the stream starts; ScanBusy inside
+    the job produces a failed event and refunds its reservation.
     """
     reject_cross_site_scan_start(request)
     require_permission(permission_confirmed, user, url)
-    enforce_scan_rate_limit(user.id)
 
     async def events():
-        try:
-            async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
-                async for event_name, payload in stream:
-                    yield _sse(event_name, payload.model_dump_json())
-        except ValueError as exc:
-            yield _sse("failed", json.dumps({"detail": str(exc)}))
-
+        async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
+            async for event_name, payload in stream:
+                yield event_name, payload.model_dump_json()
+    response = await stream_response(user.id, 'url_scan', url, request_id, events)
     return SseResponse(
-        events(),
+        response.body_iterator,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
+        headers=dict(response.headers),
     )
 
 
 @app.get("/repo/stream", dependencies=[Depends(require_scans_running)])
 async def repo_scan_stream(
-    url: str, request: Request, user: User = Depends(current_user)
+    url: str, request: Request, request_id: str, user: User = Depends(current_user)
 ) -> StreamingResponse:
     """Same repo scan as `POST /repo/scan`, reported as it happens instead of
     all at once. The repo-side sibling of `GET /scan/stream` -- same SSE
@@ -797,20 +767,16 @@ async def repo_scan_stream(
     (`repo_orchestrator.run_repo_scan_stream`).
     """
     reject_cross_site_scan_start(request)
-    enforce_scan_rate_limit(user.id)
 
     async def events():
-        try:
-            async with _closing(run_repo_scan_stream(url, user_id=user.id)) as stream:
-                async for event_name, payload in stream:
-                    yield _sse(event_name, payload.model_dump_json())
-        except ValueError as exc:
-            yield _sse("failed", json.dumps({"detail": str(exc)}))
-
+        async with _closing(run_repo_scan_stream(url, user_id=user.id)) as stream:
+            async for event_name, payload in stream:
+                yield event_name, payload.model_dump_json()
+    response = await stream_response(user.id, 'repo_scan', url, request_id, events)
     return SseResponse(
-        events(),
+        response.body_iterator,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
+        headers=dict(response.headers),
     )
 
 
@@ -938,8 +904,6 @@ async def finding_fix(
     With no GROQ_API_KEY: returns 503 with a clear message, never a 500.
     """
     report = load_owned_scan(scan_id, user)
-    if not get_api_key():
-        raise HTTPException(status_code=503, detail="AI fix suggestions require GROQ_API_KEY.")
 
     finding = next((f for f in report.findings if f.id == finding_key), None)
     if finding is None:
@@ -948,7 +912,7 @@ async def finding_fix(
             detail=f"Finding {finding_key!r} not found in scan {scan_id!r}",
         )
 
-    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate)
+    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate, user_id=user.id)
     if suggestion is None:
         raise HTTPException(status_code=503, detail="Fix suggestion generation failed. Try again.")
     return suggestion
@@ -1133,10 +1097,12 @@ async def finding_verify(
     """
     report = load_owned_scan(scan_id, user)
 
-    try:
-        return await verify_finding(report, user, finding_key)
-    except VerifyError as exc:
-        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    async def verify():
+        try:
+            return await verify_finding(report, user, finding_key)
+        except VerifyError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return await charged(user.id, 'verify', verify)
 
 
 @app.get("/scans/{scan_id}/audit", response_model=list[AuditLogEntry])
@@ -1165,10 +1131,10 @@ async def chat_post(scan_id: str, body: ChatQuestion, user: User = Depends(curre
         raise HTTPException(status_code=503, detail="Chat requires GROQ_API_KEY.")
 
     question = body.question.strip()
-    if not question:
-        raise HTTPException(status_code=422, detail="question must not be empty")
+    if not question or len(question) > 12000:
+        raise HTTPException(status_code=422, detail="Question must contain 1–12000 characters.")
 
-    msg = await chat_answer(scan_id, report, report.checklist, question)
+    msg = await chat_answer(scan_id, report, report.checklist, question, user_id=user.id)
     if msg is None:
         raise HTTPException(status_code=503, detail="Chat answer generation failed. Try again.")
     return msg
@@ -1202,7 +1168,7 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
     report = load_owned_scan(scan_id, user)
 
     fixes = load_fixes_for_scan(scan_id, PROMPT_VERSION)
-    content = await exporter.render(report, fixes)
+    content = await pdf_operation(user.id, lambda: exporter.render(report, fixes)) if format_id == 'pdf' else await exporter.render(report, fixes)
 
     host = urlparse(report.url).netloc or "report"
     slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
@@ -1214,3 +1180,8 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
             "Content-Disposition": f'attachment; filename="sentinels-{slug}.{exporter.extension}"'
         },
     )
+
+
+# Register the concrete route so A2's route inventory covers it on FastAPI
+# versions that retain included routers lazily instead of flattening app.routes.
+app.add_api_route('/usage', get_usage, methods=['GET'])

@@ -7,6 +7,8 @@ from fastapi import HTTPException
 
 import budgeted_operations as ops
 import net.policy
+import httpcore
+from net.client import PolicyBackend
 from agents.base import ScanContext
 from agents.subdomain import _is_scannable
 from agents.tls import TLSAgent
@@ -86,3 +88,48 @@ async def test_real_scan_slots_refund_rest_and_stream(account, monkeypatch, capa
         assert 'event: failed' in events
         assert count(account, 'url_scan') == 0
     assert slots.running == 0
+
+
+async def test_connect_budget_cancels_dns_before_any_socket_is_opened():
+    cancelled = asyncio.Event()
+    async def resolver(host):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    class Inner(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, *args, **kwargs):
+            pytest.fail('DNS exhausted the budget; no socket should open')
+    with pytest.raises(httpcore.ConnectTimeout):
+        await PolicyBackend(resolver=resolver, inner=Inner()).connect_tcp('example.com', 443, timeout=.02)
+    assert cancelled.is_set()
+
+
+async def test_address_retries_use_only_the_remaining_connect_budget():
+    seen = []
+    async def resolver(host):
+        return ['93.184.216.34', '93.184.216.35']
+    class Inner(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, host, port, timeout=None, **kwargs):
+            seen.append(timeout)
+            if len(seen) == 1:
+                await asyncio.sleep(.01)
+                raise httpcore.ConnectTimeout('first address unavailable')
+            return 'connected'
+    assert await PolicyBackend(resolver=resolver, inner=Inner()).connect_tcp('example.com', 443, timeout=.2) == 'connected'
+    assert 0 < seen[1] < seen[0] <= .2
+
+
+def test_tls_does_not_restart_timeout_for_every_address(monkeypatch):
+    import agents.tls as tls
+    seen = []
+    clock = iter([0, 1, 11])
+    monkeypatch.setattr(tls.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(tls, 'resolve_and_check_sync', lambda host: ['93.184.216.34', '93.184.216.35'])
+    def connect(address, timeout=None):
+        seen.append((address, timeout))
+        raise OSError('first address unavailable')
+    monkeypatch.setattr(tls.socket, 'create_connection', connect)
+    with pytest.raises(TimeoutError, match='budget exhausted'):
+        tls.fetch_certificate('example.com', 443, 10)
+    assert seen == [(('93.184.216.34', 443), 9)]

@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from uuid import uuid4
 
 from tests.test_main_audit import SECRET, _signed_in_cookie  # noqa: F401
 
@@ -153,7 +154,7 @@ def stream_spy(client, monkeypatch):
 
     monkeypatch.setattr(main, "run_scan_stream", fake_stream)
     monkeypatch.setattr(main, "run_repo_scan_stream", fake_stream)
-    monkeypatch.setattr(main, "enforce_scan_rate_limit", fake_rate_limit)
+    monkeypatch.setattr('budgeted_operations.enforce_scan_rate_limit', fake_rate_limit)
     return calls
 
 
@@ -163,7 +164,7 @@ def test_a_scan_started_from_another_site_is_refused(client, stream_spy, path, t
     _, cookie = _signed_in_cookie(1, "alice")
     client.cookies.set("sentinels_session", cookie)
 
-    res = client.get(path, params={"url": target}, headers={"Sec-Fetch-Site": site})
+    res = client.get(path, params={"url": target, "request_id": str(uuid4())}, headers={"Sec-Fetch-Site": site})
 
     assert res.status_code == 403
     assert stream_spy == {"scans": 0, "rate_limit": 0}
@@ -177,7 +178,7 @@ def test_a_scan_started_from_sentinels_itself_goes_ahead(client, stream_spy, pat
     headers = {"Sec-Fetch-Site": site} if site else {}
 
     res = client.get(
-        path, params={"url": target, "permission_confirmed": "true"}, headers=headers
+        path, params={"url": target, "permission_confirmed": "true", "request_id": str(uuid4())}, headers=headers
     )
 
     assert res.status_code == 200
@@ -197,6 +198,7 @@ def test_the_report_body_pdf_route_is_gone(client):
 
 
 def test_the_owner_gets_a_pdf_of_the_stored_scan(client, monkeypatch):
+    monkeypatch.setenv('SENTINELS_PDF_ENABLED', 'true')
     import report.pdf as pdf_module
 
     seen = []

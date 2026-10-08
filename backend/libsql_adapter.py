@@ -7,7 +7,10 @@ rows, constraint exceptions and transaction behavior explicitly.
 from __future__ import annotations
 
 import sqlite3
+import time
 import libsql
+
+_BUSY_RETRY_SECONDS = 5.0
 
 
 class NamedRow(tuple):
@@ -28,17 +31,30 @@ class NamedRow(tuple):
         return super().__getitem__(key)
 
 
-def _call(operation, *args):
-    try:
-        return operation(*args)
-    except (ValueError, libsql.Error) as exc:
-        message = str(exc)
-        if "constraint failed" in message.lower():
-            raise sqlite3.IntegrityError(message) from exc
-        # Avoid including credentials or a remote service's response in errors.
-        if any(part in message.lower() for part in ("http", "authorization", "token", "remote")):
-            message = "libSQL operation failed; verify database connectivity and configuration."
-        raise sqlite3.OperationalError(message) from exc
+def _call(operation, *args, retry_locked=True):
+    deadline = time.monotonic() + _BUSY_RETRY_SECONDS
+    delay = .005
+    while True:
+        try:
+            return operation(*args)
+        except (ValueError, libsql.Error) as exc:
+            message = str(exc)
+            # Connections disable native busy waits; handle contention here.
+            # Retry only explicit SQLite lock failures (the statement did not
+            # succeed), never ambiguous network errors or constraint failures.
+            # Sleeping in Python releases the GIL so the owning thread can
+            # commit; a native busy wait can starve that same thread.
+            remaining = deadline - time.monotonic()
+            if retry_locked and message.lower() in {"database is locked", "database table is locked"} and remaining > 0:
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, .05)
+                continue
+            if "constraint failed" in message.lower():
+                raise sqlite3.IntegrityError(message) from exc
+            # Avoid including credentials or a remote service's response in errors.
+            if any(part in message.lower() for part in ("http", "authorization", "token", "remote")):
+                message = "libSQL operation failed; verify database connectivity and configuration."
+            raise sqlite3.OperationalError(message) from exc
 
 
 class Cursor:
@@ -89,7 +105,9 @@ class Connection:
         return Cursor(_call(self.raw.execute, sql, tuple(parameters)))
 
     def executemany(self, sql, parameters):
-        return Cursor(_call(self.raw.executemany, sql, [tuple(p) for p in parameters]))
+        # A batch can have partially run before failing. Its caller must roll
+        # back the transaction; never replay the whole batch automatically.
+        return Cursor(_call(self.raw.executemany, sql, [tuple(p) for p in parameters], retry_locked=False))
 
     def executescript(self, script):
         # Use SQLite's statement parser rather than split(';'): literals and

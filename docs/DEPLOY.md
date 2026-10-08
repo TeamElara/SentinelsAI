@@ -53,6 +53,14 @@ Vercel → New Project → import this repo → set **Root Directory** to
 
 ## 3. After both are live
 
+The draft Track B/C integration activates durable daily quotas and `/usage`.
+Run one backend worker. The fetch SSE client requires a canonical UUID
+`request_id`; reconnects must retain that same ID. A disconnected subscriber
+leaves one bounded job running, and deadline failures or ScanBusy refund
+quota. Both REST and SSE share the daily counters. See
+[Track B/C handoff](TRACK-B-C-HANDOFF.md) for verification and remaining
+remote database/deployment gates before releasing that integration.
+
 - Update the GitHub App's **Homepage URL** (App settings page) to the Vercel
   domain instead of `localhost:3000`.
 - Set the GitHub App's **Callback URL** to

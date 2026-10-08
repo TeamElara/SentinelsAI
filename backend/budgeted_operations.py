@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from auth.deps import current_user
 from db import get_connection
 from models import User
-from rate_limit import enforce_scan_rate_limit
+from rate_limit import enforce_scan_rate_limit, refund_scan_rate_limit
 from storage.scans import get_scan, scan_owner
 from usage import reserve, usage_for
 
@@ -74,11 +74,18 @@ async def charged(user_id, kind, operation, *, unavailable_none=False):
 
 
 async def scan_operation(user_id, kind, operation):
-    enforce_scan_rate_limit(user_id)
+    ticket = enforce_scan_rate_limit(user_id)
     async def run():
         async with _scan_slots:
             return await operation()
-    return await charged(user_id, kind, run)
+    try:
+        return await charged(user_id, kind, run)
+    except BaseException as exc:
+        if not isinstance(exc, ValueError) and not (
+            isinstance(exc, HTTPException) and exc.status_code < 500 and exc.status_code != 429
+        ):
+            refund_scan_rate_limit(user_id, ticket)
+        raise
 
 
 async def pdf_operation(user_id, operation):
@@ -133,7 +140,7 @@ def _finish(reservation_id, *, scan_id=None, error=None):
         conn.close()
 
 
-async def _run(job, reservation, runner):
+async def _run(job, reservation, runner, user_id=None, burst_ticket=None):
     try:
         async with asyncio.timeout(DEADLINE_SECONDS):
             async with _scan_slots:
@@ -151,6 +158,7 @@ async def _run(job, reservation, runner):
             await asyncio.to_thread(reservation.complete)
         else:
             await asyncio.shield(asyncio.to_thread(reservation.refund))
+            refund_scan_rate_limit(user_id, burst_ticket)
         await asyncio.to_thread(_finish, reservation.id, error=message)
         await job.emit('failed', json.dumps({'detail': message}))
 
@@ -193,13 +201,13 @@ async def stream_response(user_id, kind, target, request_id, runner):
             await asyncio.to_thread(reservation.refund)
             raise HTTPException(503, 'Scanner is busy. Try again shortly.', headers={'Retry-After': '5'})
         try:
-            enforce_scan_rate_limit(user_id)
+            burst_ticket = enforce_scan_rate_limit(user_id)
         except HTTPException:
             await asyncio.to_thread(reservation.refund)
             raise
         job = Job()
         _jobs[reservation.id] = job
-        job.task = asyncio.create_task(_run(job, reservation, runner))
+        job.task = asyncio.create_task(_run(job, reservation, runner, user_id, burst_ticket))
     elif job is None:
         row = await asyncio.to_thread(_job_row, reservation.id)
         job = Job()

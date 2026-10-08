@@ -26,6 +26,7 @@ closes the gap by doing the check where the connection is made:
 from __future__ import annotations
 
 import ssl
+import asyncio
 import zlib
 from typing import Any, AsyncIterator, Iterable
 
@@ -95,10 +96,23 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
         self._inner = inner or httpcore.AnyIOBackend()
 
     async def connect_tcp(
+        self, host: str, port: int, timeout: float | None = None,
+        local_address: str | None = None, socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        # One budget covers DNS and all address attempts, rather than granting
+        # each stage a fresh timeout. Outer cancellation also stops async DNS.
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+        try:
+            async with asyncio.timeout(timeout):
+                return await self._connect_tcp(host, port, deadline, local_address, socket_options)
+        except TimeoutError as exc:
+            raise httpcore.ConnectTimeout("DNS and TCP connection exceeded the connect timeout.") from exc
+
+    async def _connect_tcp(
         self,
         host: str,
         port: int,
-        timeout: float | None = None,
+        deadline: float | None = None,
         local_address: str | None = None,
         socket_options: Iterable[Any] | None = None,
     ) -> httpcore.AsyncNetworkStream:
@@ -117,7 +131,7 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
                 return await self._inner.connect_tcp(
                     address,
                     port,
-                    timeout=timeout,
+                    timeout=None if deadline is None else max(0, deadline - asyncio.get_running_loop().time()),
                     local_address=local_address,
                     socket_options=socket_options,
                 )

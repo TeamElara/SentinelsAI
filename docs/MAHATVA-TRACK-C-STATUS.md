@@ -4,6 +4,13 @@ Updated 8 October 2026. All prepared code is committed and pushed. These are
 draft review branches; no changes have been merged into main or enabled as a
 public beta. The adopted final plan requires teammate review and the live gates.
 
+Latest follow-up: [Track B/C handoff and reviews](TRACK-B-C-HANDOFF.md) on
+`codex/b-c-handoff`, based on the team's combined integration PR #31. It
+implements the requested B/C coverage/PDF/quota contracts and activates C7
+on the actual A-protected routes in the draft integration branch. C7 is
+still inactive on main until the reviewed integration is merged. Original
+task PRs below retain their historical dependency gates.
+
 | Task | Review | Implemented evidence / remaining gate |
 | --- | --- | --- |
 | C1 | [PR #1](https://github.com/TeamElara/SentinelsAI/pull/1) | Canonical penalties, deterministic duplicate handling, permutation and stream parity tests. |

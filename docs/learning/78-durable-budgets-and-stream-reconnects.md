@@ -1,5 +1,11 @@
 # C7 — durable budgets and reconnects
 
+**Integration update (8 October 2026):** C7 is now wired on the draft
+`codex/b-c-handoff` branch, built on PR #31. Real-route tests replace the
+temporary seam tests, and the old generated patches have been removed.
+See [the handoff report](../TRACK-B-C-HANDOFF.md) for current behavior and
+release gates. The activation notes below describe the original C7 PR.
+
 Migration 17 adds atomic per-account UTC-day counters, reservations, global AI
 attempt counters and stored scan-job identities. URL REST and streams share
 `url_scan`; repository REST and streams share `repo_scan`. Defaults are 10 each

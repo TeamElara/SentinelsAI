@@ -1,4 +1,7 @@
 import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 import db
@@ -70,3 +73,63 @@ def test_configured_turso_requires_credentials(monkeypatch):
     monkeypatch.delenv("SENTINELS_DB_DRIVER", raising=False)
     with pytest.raises(RuntimeError, match="TURSO_AUTH_TOKEN"):
         db.get_connection()
+
+
+def test_libsql_contended_writer_waits_without_starving_lock_owner(monkeypatch, tmp_path):
+    monkeypatch.setenv('SENTINELS_DB_DRIVER', 'libsql')
+    monkeypatch.setattr(db, 'DB_PATH', tmp_path / 'writers.db')
+    first = db.get_connection()
+    first.execute('CREATE TABLE t(value INTEGER)')
+    first.commit()
+    first.execute('BEGIN IMMEDIATE')
+    first.execute('INSERT INTO t VALUES (1)')
+    started = Event()
+    def second_writer():
+        second = db.get_connection()
+        try:
+            started.set()
+            second.execute('BEGIN IMMEDIATE')
+            second.execute('INSERT INTO t VALUES (2)')
+            second.commit()
+        finally:
+            second.close()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(second_writer)
+        assert started.wait(1)
+        time.sleep(.03)
+        first.commit()
+        future.result(timeout=2)
+    assert first.execute('SELECT SUM(value) FROM t').fetchone()[0] == 3
+    first.close()
+
+
+def test_libsql_never_retries_ambiguous_network_failure(monkeypatch):
+    from libsql_adapter import _call
+    calls = []
+    def fails():
+        calls.append(True)
+        raise ValueError('remote HTTP operation failed')
+    with pytest.raises(sqlite3.OperationalError, match='verify database connectivity'):
+        _call(fails)
+    assert len(calls) == 1
+
+
+def test_libsql_contention_retry_has_a_deadline(monkeypatch):
+    import libsql_adapter
+    monkeypatch.setattr(libsql_adapter, '_BUSY_RETRY_SECONDS', 0)
+    def locked():
+        raise ValueError('database is locked')
+    with pytest.raises(sqlite3.OperationalError, match='database is locked'):
+        libsql_adapter._call(locked)
+
+
+def test_libsql_does_not_replay_a_partially_executed_batch():
+    from libsql_adapter import Connection
+    written = []
+    class Raw:
+        def executemany(self, sql, rows):
+            written.append(rows[0])
+            raise ValueError('database is locked')
+    with pytest.raises(sqlite3.OperationalError):
+        Connection(Raw()).executemany('INSERT INTO t VALUES (?)', [(1,), (2,)])
+    assert written == [(1,)]

@@ -88,6 +88,7 @@ async def check(args):
             if args.local_fixtures:
                 await page.goto(base + '/url')
                 await page.get_by_label('Address to inspect').fill('https://example.com')
+                await page.get_by_role('checkbox').check()
                 await page.get_by_role('button', name='Inspect', exact=True).click()
                 await page.get_by_role('status').filter(has_text='Waking up the scanner').wait_for(timeout=4500)
                 await page.screenshot(path=str(args.output.with_suffix('.png')), full_page=True)
