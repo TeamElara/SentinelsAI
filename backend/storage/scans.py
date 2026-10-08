@@ -88,14 +88,13 @@ def scan_owner(scan_id: str) -> int | None:
 def list_scans(limit: int = 20, offset: int = 0, user_id: int | None = None) -> list[ScanSummary]:
     """Return scan summaries, newest first.
 
-    `user_id` scopes the list to one person's scans plus every unowned one.
-    Unowned scans (`user_id IS NULL`) are the ones taken before Stage 0 added
-    identity — hiding them would make a working install look empty after an
-    upgrade, so they stay visible to everyone rather than being orphaned.
+    `user_id` scopes the list to that person's own scans. Unowned scans
+    (`user_id IS NULL`, taken before Stage 0 added identity) belong to nobody,
+    so they are left out rather than shown to every account.
     """
     conn = get_connection()
     try:
-        where = "" if user_id is None else "WHERE user_id = ? OR user_id IS NULL"
+        where = "" if user_id is None else "WHERE user_id = ?"
         params: tuple = (limit, offset) if user_id is None else (user_id, limit, offset)
         rows = conn.execute(
             f"""
