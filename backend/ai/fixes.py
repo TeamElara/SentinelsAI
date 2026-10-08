@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from ai.client import call_groq, get_api_key, DEFAULT_MODEL
 from ai.prompts import build_fix_messages, PROMPT_VERSION
 from db import get_connection
@@ -29,9 +31,6 @@ async def get_or_generate_fix(
     Returns None when no GROQ_API_KEY is set — callers return a clean
     "unavailable" JSON response rather than a 500.
     """
-    if not get_api_key():
-        return None
-
     conn = get_connection()
     try:
         finding_id = get_finding_db_id(conn, scan_id, finding_key)
@@ -42,6 +41,9 @@ async def get_or_generate_fix(
             cached = get_cached_fix(conn, finding_id, PROMPT_VERSION)
             if cached is not None:
                 return cached
+
+        if not get_api_key():
+            return None
 
         # Cache miss (or regenerate=True) — call the LLM.
         messages = build_fix_messages(finding)
@@ -60,17 +62,20 @@ async def get_or_generate_fix(
             except json.JSONDecodeError:
                 return None
 
+        if not isinstance(data, dict):
+            return None
         now = datetime.now(timezone.utc).isoformat()
-        suggestion = FixSuggestion(
-            why_it_exists=data.get("why_it_exists", ""),
-            security_impact=data.get("security_impact", ""),
-            exploitation=data.get("exploitation", ""),
-            recommended_fix=data.get("recommended_fix", ""),
-            best_practices=data.get("best_practices", []),
-            framework_examples=data.get("framework_examples", {}),
-            generated_at=now,
-            model=DEFAULT_MODEL,
-        )
+        try:
+            suggestion = FixSuggestion(
+                **{key: data[key] for key in (
+                    "why_it_exists", "security_impact", "exploitation",
+                    "recommended_fix", "best_practices", "framework_examples",
+                )},
+                generated_at=now,
+                model=DEFAULT_MODEL,
+            )
+        except (KeyError, TypeError, ValidationError):
+            return None
         save_fix(conn, finding_id, PROMPT_VERSION, DEFAULT_MODEL, suggestion)
         return suggestion
     finally:
