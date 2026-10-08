@@ -11,6 +11,12 @@ on the actual A-protected routes in the draft integration branch. C7 is
 still inactive on main until the reviewed integration is merged. Original
 task PRs below retain their historical dependency gates.
 
+[PR #32](https://github.com/TeamElara/SentinelsAI/pull/32) passed GitHub CI:
+959 backend tests per SQLite/libSQL driver on Python 3.13, eight frontend
+tests plus lint/build on Node 24, and production dependency audits. Chromium
+UI/header and real sandboxed PDF checks passed locally. The new Vercel
+preview still requires SSO; deployment access/live gates remain open.
+
 | Task | Review | Implemented evidence / remaining gate |
 | --- | --- | --- |
 | C1 | [PR #1](https://github.com/TeamElara/SentinelsAI/pull/1) | Canonical penalties, deterministic duplicate handling, permutation and stream parity tests. |

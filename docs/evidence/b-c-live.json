@@ -1,0 +1,7 @@
+{
+  "url": "https://sentinels-ai-git-codex-b-c-handoff-elara17.vercel.app",
+  "status": "pending",
+  "http_status": 302,
+  "redirect_hostname": "vercel.com",
+  "reason": "Vercel deployment protection returned SSO, not an application response."
+}

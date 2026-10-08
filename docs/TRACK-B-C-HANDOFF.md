@@ -5,6 +5,8 @@ which contains the A ownership, route audit, permission and pause controls,
 the B network/limits stack and the C stack. It is a draft integration change;
 teammate review and live release gates still apply.
 
+Review: [PR #32](https://github.com/TeamElara/SentinelsAI/pull/32).
+
 ## Handoff behavior
 
 - Internal discovered hosts stay in the inventory, receive `skipped` coverage
@@ -42,7 +44,7 @@ Exact reviewed head: `e47197b0dc30368798e382f7f6a08953d0698307`.
 `PolicyBackend.connect_tcp` awaits DNS outside the timeout and passes the
 full timeout to each candidate address. The deterministic, socket-free
 reproducer `backend/scripts/review_b_connect_timeout.py` loads that exact
-head. A 5 ms budget waited about 52 ms for injected DNS and then connected;
+head. A 5 ms budget waited over 50 ms for injected DNS and then connected;
 two attempts each received a fresh 20 ms budget. B4/B7 bound normal DNS
 lookups separately, but do not fix this per-connect budget.
 
@@ -92,8 +94,12 @@ an HTTP connection timeout ([libSQL 0.1.11 source](https://github.com/tursodatab
 
 ## Evidence and limits
 
-- Python 3.13 and Node 24 are configured in CI. Both database-driver jobs
-  and frontend tests/lint/build are required on the pushed head.
+- [GitHub CI](https://github.com/TeamElara/SentinelsAI/actions/runs/37798788595)
+  passed on implementation commit `1e6044698b7d7594b0a08bcafe1dad70fda66523`:
+  **959 backend tests on each of SQLite and libSQL using Python 3.13**;
+  **eight frontend tests, lint and production build using Node 24**. Both
+  dependency audits passed. One TestClient deprecation warning and two
+  existing frontend auth-navigation lint warnings remain.
 - [Chromium UI/header evidence](evidence/b-c-browser.json) checks the real
   local production build: permission checkbox, two wake probes roughly five
   seconds apart, one stream, provisional coverage, PDF 429, disabled PDF
@@ -103,6 +109,9 @@ an HTTP connection timeout ([libSQL 0.1.11 source](https://github.com/tursodatab
   skipped/failed coverage and provisional messaging. The server default stays off.
 - Production npm and Python dependency audits found no known vulnerabilities.
   The previously documented dev-only ESLint dependency advisory remains.
+- The Vercel preview built successfully, but its application URL returns
+  a 302 to Vercel SSO: [live probe](evidence/b-c-live.json). Build success
+  does not satisfy the protected application's live tests.
 
 This does not verify remote Turso transactions/restore/latency, real Render
 redeploy or wake-up, Vercel SSO-protected application behavior, OAuth, or
