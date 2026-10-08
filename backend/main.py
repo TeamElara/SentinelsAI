@@ -80,6 +80,7 @@ from remediation.registry import fixable_findings  # noqa: E402
 from remediation.tokens import fetch_installation  # noqa: E402
 from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
+from scan_limits import ScanBusy  # noqa: E402
 from report.pdf import generate_pdf  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
@@ -517,6 +518,10 @@ async def scan(request: ScanRequest, user: User = Depends(current_user)) -> Scan
     enforce_scan_rate_limit(user.id)
     try:
         return await run_scan(request.url, user_id=user.id)
+    except ScanBusy as exc:
+        # Not the client's mistake and not a server fault: too many scans are
+        # running right now. 429 tells a client to wait and try again.
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         # normalize_url's complaints (empty string, bad scheme, no host) are
         # the client's fault, not the server's — 400, not a 500 crash.
@@ -539,6 +544,8 @@ async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) ->
     enforce_scan_rate_limit(user.id)
     try:
         return await run_repo_scan(request.url, user_id=user.id)
+    except ScanBusy as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -157,3 +157,64 @@ async def test_a_bad_url_is_still_reported_in_the_stream(app_module, monkeypatch
     chunks = [chunk async for chunk in response.body_iterator]
 
     assert chunks == ['event: failed\ndata: {"detail": "That URL could not be parsed."}\n\n']
+
+
+# --- "a scan is already running" is a 429, not a 400 --------------------------
+
+
+@pytest.fixture
+def client(app_module):
+    from fastapi.testclient import TestClient
+
+    return TestClient(app_module.app)
+
+
+@pytest.mark.parametrize("path,attr", [("/scan", "run_scan"), ("/repo/scan", "run_repo_scan")])
+def test_a_busy_scanner_answers_429_with_its_own_message(client, app_module, monkeypatch, path, attr):
+    from scan_limits import ScanBusy
+
+    async def busy(url, user_id=None):
+        raise ScanBusy("You already have a scan running. Wait for it to finish.")
+
+    monkeypatch.setattr(app_module, attr, busy)
+    _, cookie = _signed_in_cookie(1, "alice")
+    client.cookies.set("sentinels_session", cookie)
+
+    res = client.post(path, json={"url": "https://example.com", "permission_confirmed": True})
+
+    assert res.status_code == 429
+    assert res.json()["detail"] == "You already have a scan running. Wait for it to finish."
+
+
+@pytest.mark.parametrize("path,attr", [("/scan", "run_scan"), ("/repo/scan", "run_repo_scan")])
+def test_other_refused_urls_are_still_a_400(client, app_module, monkeypatch, path, attr):
+    async def refuses(url, user_id=None):
+        raise ValueError("That URL could not be parsed.")
+
+    monkeypatch.setattr(app_module, attr, refuses)
+    _, cookie = _signed_in_cookie(1, "alice")
+    client.cookies.set("sentinels_session", cookie)
+
+    res = client.post(path, json={"url": "nonsense", "permission_confirmed": True})
+
+    assert res.status_code == 400
+
+
+@pytest.mark.parametrize("path,attr,target", ROUTES)
+async def test_a_busy_scanner_on_a_stream_is_reported_in_the_stream(app_module, monkeypatch, path, attr, target):
+    """EventSource can't read an HTTP status, so a stream keeps telling the
+    person why in a `failed` event, with the scanner's own message."""
+    from scan_limits import ScanBusy
+
+    async def busy(url, user_id=None):
+        raise ScanBusy("The scanner is busy. Try again in a minute.")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(app_module, attr, busy)
+    monkeypatch.setattr(app_module, "enforce_scan_rate_limit", lambda user_id: None)
+    handler, kwargs = _handler(app_module, path)
+    response = await handler(target, _Request(), user=_user(), **kwargs)
+
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks == ['event: failed\ndata: {"detail": "The scanner is busy. Try again in a minute."}\n\n']
