@@ -11,3 +11,4 @@ playwright==1.61.0
 # cryptography is the RSA it delegates to (PyJWT alone only does HMAC).
 PyJWT==2.15.1
 cryptography==50.0.1
+libsql==0.1.11

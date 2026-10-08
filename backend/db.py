@@ -13,6 +13,7 @@ M15) append further versions here rather than editing this one.
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "data" / "sentinels.db"
@@ -378,10 +379,39 @@ def get_connection() -> sqlite3.Connection:
     """One connection per call — sqlite3 connections aren't safe to share
     across threads, and FastAPI can run request handlers on different
     threads, so callers open, use, and close rather than holding one open."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+    driver = (os.environ.get("SENTINELS_DB_DRIVER") or ("libsql" if url else "sqlite")).strip()
+    if driver not in ("sqlite", "libsql"):
+        raise RuntimeError("SENTINELS_DB_DRIVER must be sqlite or libsql.")
+    if os.environ.get("RENDER") == "true" and (driver != "libsql" or not url):
+        raise RuntimeError("Render requires a remote Turso database; ephemeral SQLite cannot store production sessions or scans.")
+    if url and driver != "libsql":
+        raise RuntimeError("A configured Turso URL cannot be ignored by the sqlite driver.")
+    if driver == "libsql":
+        from urllib.parse import urlsplit
+        import libsql
+        from libsql_adapter import Connection
+        if url:
+            parsed = urlsplit(url)
+            if parsed.scheme not in ("libsql", "https") or not parsed.hostname or parsed.username or parsed.password:
+                raise RuntimeError("TURSO_DATABASE_URL must be a libsql:// or https:// database origin without embedded credentials.")
+            if not token:
+                raise RuntimeError("TURSO_AUTH_TOKEN is required for the remote database.")
+            # Connect to the primary directly: no local replica, sync delay or
+            # ephemeral disk can weaken quotas, ownership or session revocation.
+            conn = Connection(libsql.connect(url, auth_token=token))
+        else:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            conn = Connection(libsql.connect(str(DB_PATH)))
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        conn.close()
+        raise RuntimeError("The database must enforce foreign keys.")
     return conn
 
 
