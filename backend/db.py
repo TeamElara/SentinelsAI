@@ -348,6 +348,10 @@ _V16_SCHEMA = """
 ALTER TABLE scans ADD COLUMN scorer_version TEXT NOT NULL DEFAULT 'legacy-v1';
 """
 
+_V18_SCHEMA = """
+ALTER TABLE agent_runs ADD COLUMN coverage_json TEXT NOT NULL DEFAULT '[]';
+"""
+
 # Version 15 is reserved for Track A's users.blocked migration. The ledger
 # below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
@@ -366,6 +370,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (13, _V13_SCHEMA),
     (14, _V14_SCHEMA),
     (16, _V16_SCHEMA),
+    (18, _V18_SCHEMA),
 ]
 
 

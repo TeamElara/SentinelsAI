@@ -38,6 +38,7 @@ from urllib.parse import urlsplit
 
 import dns.resolver
 import httpx
+from scan_coverage import record
 
 from agents.base import BaseAgent, ScanContext
 from agents.probe import Budget, safe_get
@@ -87,17 +88,23 @@ def _resolve(hostname: str) -> tuple[str, str] | None:
     try:
         answer = resolver.resolve(hostname, "CNAME")
         return ("CNAME", str(answer[0].target).rstrip("."))
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS CNAME {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     try:
         answer = resolver.resolve(hostname, "A")
         return ("A", answer[0].address)
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS A {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     try:
         answer = resolver.resolve(hostname, "AAAA")
         return ("AAAA", answer[0].address)
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS AAAA {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     return None
 
@@ -118,6 +125,11 @@ async def _query_ct_logs(client: httpx.AsyncClient, domain: str) -> list[str]:
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError):
+        record("Certificate Transparency discovery", "unavailable", "CT service failed or returned invalid JSON.")
+        return []
+
+    if not isinstance(data, list):
+        record("Certificate Transparency discovery", "unavailable", "CT response was not a list.")
         return []
 
     names: set[str] = set()
@@ -151,7 +163,11 @@ class SubdomainAgent(BaseAgent):
 
         entries = await self._discover(context, apex, dns_budget)
         entries.sort(key=lambda e: self._sort_key(e, apex))
+        if len(entries) > MAX_DISCOVERED:
+            record("Subdomain inventory limit", "partial", "Discovered inventory exceeded the host limit.")
         entries = entries[:MAX_DISCOVERED]
+        if len(entries) > MAX_FOLLOWUP:
+            record("Subdomain follow-up limit", "partial", "Some discovered hosts were not followed up.")
 
         responses: dict[str, httpx.Response] = {}
         https_failed: set[str] = set()
@@ -224,6 +240,7 @@ class SubdomainAgent(BaseAgent):
         try:
             cert, _ = await asyncio.to_thread(fetch_certificate, apex, 443, CT_TIMEOUT)
         except Exception:  # noqa: BLE001 - discovery-only, a dead handshake just means "no SANs"
+            record("Certificate SAN discovery", "unavailable", "Could not read certificate SANs.")
             return []
         names: set[str] = set()
         for kind, value in cert.get("subjectAltName", ()):
@@ -271,6 +288,7 @@ class SubdomainAgent(BaseAgent):
             entry.tls_valid = False
         except Exception:  # noqa: BLE001 - connection refused/timeout/DNS: "couldn't determine", not "invalid"
             entry.tls_valid = None
+            record(f"TLS {entry.host}", "unavailable", "TLS handshake could not be completed.")
 
     # --- Per-subdomain findings ------------------------------------------------
 

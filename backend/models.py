@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class Severity(str, Enum):
@@ -117,6 +117,13 @@ class SubdomainEntry(BaseModel):
     issue_count: int = 0
 
 
+class CheckCoverage(BaseModel):
+    check: str
+    status: Literal["completed", "partial", "skipped", "unavailable", "failed"]
+    reason: str
+    required: bool = True
+
+
 class AgentResult(BaseModel):
     """Everything one agent returns, plus timing for the live progress UI."""
 
@@ -124,6 +131,20 @@ class AgentResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     duration_ms: int = 0
     error: Optional[str] = None
+    coverage: list[CheckCoverage] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def coverage_status(self) -> str:
+        if self.error:
+            return "failed"
+        required = [c for c in self.coverage if c.required]
+        if not self.coverage:
+            return "unavailable"
+        if all(c.status == "completed" for c in required):
+            return "completed"
+        statuses = {c.status for c in required}
+        return next(iter(statuses)) if len(statuses) == 1 else "partial"
 
 
 class ScanRequest(BaseModel):
@@ -151,6 +172,17 @@ class ScanReport(BaseModel):
     deployment_status: Optional[str] = None      # "ready" | "caution" | "blocked"
     checklist: list["ChecklistItem"] = Field(default_factory=list)
     subdomains: list["SubdomainEntry"] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def provisional(self) -> bool:
+        return not self.agents or any(a.coverage_status != "completed" for a in self.agents)
+
+    @model_validator(mode="after")
+    def require_coverage_for_readiness(self):
+        if self.provisional and self.deployment_status != "blocked":
+            self.deployment_status = "incomplete"
+        return self
 
 
 class AgentInfo(BaseModel):

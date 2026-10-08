@@ -44,5 +44,5 @@ def test_failed_migration_rolls_back_schema_and_ledger(temp_db, monkeypatch):
     conn = db.get_connection()
     assert "rolled_back" not in [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=99").fetchone() is None
-    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 16
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 18
     conn.close()

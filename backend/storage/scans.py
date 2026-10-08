@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 
 from db import get_connection
@@ -176,6 +177,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
                 findings=findings_by_agent.get(ar["agent"], []),
                 duration_ms=ar["duration_ms"],
                 error=ar["error"],
+                coverage=json.loads(ar["coverage_json"]),
             )
             for ar in agent_rows
         ]
@@ -189,6 +191,8 @@ def get_scan(scan_id: str) -> ScanReport | None:
         counts = count_by_severity(all_findings)
 
         checklist = load_checklist(conn, scan_id)
+        from checklist.evaluator import apply_coverage
+        apply_coverage(checklist, agents)
         subdomains = load_subdomains(conn, scan_id)
 
         return ScanReport(

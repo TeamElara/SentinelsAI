@@ -255,6 +255,12 @@ def build_chat_messages(
     ]
     if report.deployment_status:
         digest_lines.append(f"Deployment status: {report.deployment_status}")
+    digest_lines.append(f"Score/grade provisional: {report.provisional}")
+    digest_lines.append("Check coverage:")
+    for agent in report.agents:
+        digest_lines.append(f"  {agent.agent}: {agent.coverage_status}")
+        for check in agent.coverage:
+            digest_lines.append(f"    {check.check}: {check.status} — {check.reason}")
     if report.readiness_score is not None:
         digest_lines.append(f"Readiness score: {report.readiness_score}/100")
 

@@ -81,9 +81,13 @@ async def _finalize(
 
     score = calculate_score(findings, raw_url)
     grade = grade_for_score(score)
-    summary = await summarize(raw_url, score, grade, findings, target_type="repo")
+    from scan_coverage import notice
+    coverage_notice = notice(agent_results)
+    summary = await summarize(raw_url, score, grade, findings, target_type="repo", coverage_notice=coverage_notice)
+    if coverage_notice:
+        summary = coverage_notice + (" " + summary if summary else "")
 
-    checklist = evaluate(findings, rules=REPO_RULES)
+    checklist = evaluate(findings, rules=REPO_RULES, agent_results=agent_results)
     readiness_score, deployment_status = compute_readiness(checklist, rules=REPO_RULES)
 
     report = ScanReport(

@@ -71,11 +71,20 @@ export interface SubdomainEntry {
   issue_count: number;
 }
 
+export interface CheckCoverage {
+  check: string;
+  status: "completed" | "partial" | "skipped" | "unavailable" | "failed";
+  reason: string;
+  required: boolean;
+}
+
 export interface AgentResult {
   agent: string;
   findings: Finding[];
   duration_ms: number;
   error: string | null;
+  coverage: CheckCoverage[];
+  coverage_status: string;
 }
 
 export interface AgentInfo {
@@ -100,6 +109,7 @@ export interface ChecklistItem {
 }
 
 export interface ScanReport {
+  provisional: boolean;
   scorer_version: string;
   id: string;                             // uuid4, set once the scan is persisted
   url: string;                            // a repo scan's "URL" is its GitHub URL -- same field

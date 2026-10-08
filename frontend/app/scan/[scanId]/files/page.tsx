@@ -113,7 +113,7 @@ export default function FilesPage() {
               </p>
               {selectedFindings.length === 0 ? (
                 <p className="mt-4 text-sm text-muted sm:text-base">
-                  Nothing found here — this file is clean.
+                  No findings recorded for this file. Review agent coverage for limitations.
                 </p>
               ) : (
                 <ul className="mt-6 max-w-3xl space-y-9">

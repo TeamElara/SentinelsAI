@@ -6,11 +6,12 @@ acceptance criterion: "scan the same site twice → identical checklist output."
 """
 from __future__ import annotations
 
-from models import ChecklistItem, Finding
+from models import AgentResult, ChecklistItem, Finding
 from checklist.rules import ChecklistRule, RULES
 
 
-def evaluate(findings: list[Finding], rules: list[ChecklistRule] = RULES) -> list[ChecklistItem]:
+def evaluate(findings: list[Finding], rules: list[ChecklistRule] = RULES,
+             agent_results: list[AgentResult] | None = None) -> list[ChecklistItem]:
     """Turn a finished scan's findings into a full deployment checklist.
 
     `rules` defaults to the URL side's `RULES` so every existing caller keeps
@@ -30,7 +31,20 @@ def evaluate(findings: list[Finding], rules: list[ChecklistRule] = RULES) -> lis
             suggested_fix=suggested_fix,
             agent=rule.agent,
         ))
+    if agent_results is not None:
+        apply_coverage(items, agent_results)
     return items
+
+
+def apply_coverage(items: list[ChecklistItem], results: list[AgentResult]) -> None:
+    by_agent = {r.agent: r for r in results}
+    for item in items:
+        if item.tier == "self_attested" or item.state in ("fail", "warn"):
+            continue
+        result = by_agent.get(item.agent)
+        if result is None or result.coverage_status != "completed":
+            item.state = "unknown"
+            item.explanation = "This check has incomplete or unrecorded coverage; no passing result can be concluded."
 
 
 def compute_readiness(
@@ -69,5 +83,8 @@ def compute_readiness(
     for item in auto_inferred:
         if item.state in ("fail", "warn"):
             return readiness_score, "caution"
+
+    if any(item.state == "unknown" for item in auto_inferred):
+        return readiness_score, "incomplete"
 
     return readiness_score, "ready"

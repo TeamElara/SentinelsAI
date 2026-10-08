@@ -25,6 +25,7 @@ import { useScrollDrift } from "@/lib/useScrollDrift";
 import { ScoreRing } from "@/components/ScoreRing";
 import { AgentCarousel } from "@/components/AgentCarousel";
 import { Footer } from "@/components/Footer";
+import { CoveragePanel } from "@/components/CoveragePanel";
 
 /* The single worst problem in the report, as a plain-English headline.
    `groupByCategory` already sorts worst category first and worst finding
@@ -69,14 +70,14 @@ function DeploymentBadge({
       ? "text-critical"
       : status === "caution"
         ? "text-[#facc15]"
-        : "text-[#4ade80]";
+        : status === "ready" ? "text-[#4ade80]" : "text-muted";
 
   const label =
     status === "blocked"
       ? "Blocked"
       : status === "caution"
         ? "Caution"
-        : "Ready";
+        : status === "ready" ? "Ready" : "Incomplete";
 
   return (
     <Link
@@ -267,6 +268,7 @@ export default function ScanPage() {
             {report.scanned_at} · {report.duration_ms}ms
             {" · Scorer: "}{report.scorer_version ?? "legacy-v1"}
           </p>
+          {(report.provisional ?? true) && <p className="mt-3 text-sm text-muted">Provisional score and grade: some required checks are incomplete or their coverage was not recorded.</p>}
 
           {exportError && (
             <p className="mt-2 font-mono text-sm text-critical">{exportError}</p>
@@ -333,6 +335,7 @@ export default function ScanPage() {
         </section>
       )}
 
+      <CoveragePanel agents={report.agents} />
     </article>
 
     {/* Outside the article: AgentReel's panels used to bleed to the
