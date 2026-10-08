@@ -54,6 +54,7 @@ from auth.github_oauth import (  # noqa: E402
     get_callback_url,
     get_frontend_origin,
     install_url,
+    list_user_installation_ids,
     missing_settings,
     oauth_configured,
 )
@@ -82,7 +83,12 @@ from report.pdf import generate_pdf  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
-from storage.installations import list_installations, revoke_installation, save_installation  # noqa: E402
+from storage.installations import (  # noqa: E402
+    InstallationOwnedByAnotherUser,
+    list_installations,
+    revoke_installation,
+    save_installation,
+)
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
 from storage.remediation import list_audit, list_audit_for_user, list_fix_applications  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
@@ -362,16 +368,25 @@ async def auth_install_callback(
     installation_id: int = 0,
     setup_action: str = "",
     state: str = "",
+    code: str = "",
 ) -> RedirectResponse:
     """GitHub's landing point after the user installs (or configures) the App.
 
-    There is no code-for-token exchange here, and none is needed to trust the
-    result: GitHub only redirects to this URL after the person signed in *on
-    github.com* completed the install screen for that installation, and the
-    `state` cookie ties that redirect to this Sentinels session. What the
-    callback still has to do is ask GitHub *which account* the installation
-    covers — the redirect carries only a number, and `account_login` is what
-    every later write check compares against.
+    The redirect carries an `installation_id` and nothing that proves the
+    person arriving owns it: `state` only ties the redirect to this browser's
+    own session, and anyone can type another account's installation id into
+    the URL. So the callback asks GitHub, as the person:
+
+      1. the `code` GitHub adds (the App's "request user authorization during
+         installation" setting) is traded for a token for whoever completed
+         the flow;
+      2. that token's GitHub id must be the signed-in Sentinels user's;
+      3. the installation id must be one that user can access.
+
+    Only then does it ask GitHub, as the App, *which account* the installation
+    covers — `account_login` is what every later write check compares against.
+    Being able to access an installation still isn't permission to write to
+    its repositories; `remediation/access.py` checks that per repository.
     """
     frontend = get_frontend_origin()
     expected_state = request.cookies.get("sentinels_install_state")
@@ -390,6 +405,20 @@ async def auth_install_callback(
     if user is None:
         return _fail("not_signed_in")
 
+    if not code:
+        return _fail("authorization_required")
+    access_token = await exchange_code(code)
+    if access_token is None:
+        return _fail("authorization_failed")
+    identity = await fetch_identity(access_token)
+    if identity is None or identity.github_id != user.github_id:
+        return _fail("identity_mismatch")
+    accessible = await list_user_installation_ids(access_token)
+    if accessible is None:
+        return _fail("installation_lookup_failed")
+    if installation_id not in accessible:
+        return _fail("installation_not_yours")
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         metadata = await fetch_installation(client, installation_id)
     if metadata is None:
@@ -399,13 +428,16 @@ async def auth_install_callback(
     if not isinstance(account, str) or not account:
         return _fail("installation_lookup_failed")
 
-    save_installation(
-        user_id=user.id,
-        installation_id=installation_id,
-        account_login=account,
-        repo_selection=metadata.get("repository_selection") or "selected",
-        permissions=metadata.get("permissions") or {},
-    )
+    try:
+        save_installation(
+            user_id=user.id,
+            installation_id=installation_id,
+            account_login=account,
+            repo_selection=metadata.get("repository_selection") or "selected",
+            permissions=metadata.get("permissions") or {},
+        )
+    except InstallationOwnedByAnotherUser:
+        return _fail("installation_taken")
 
     response = RedirectResponse(f"{frontend}/settings?installed={account}")
     response.delete_cookie("sentinels_install_state", path="/")

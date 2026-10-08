@@ -22,6 +22,10 @@ from db import get_connection
 from models import GitHubInstallation
 
 
+class InstallationOwnedByAnotherUser(Exception):
+    """Another Sentinels user already holds a live grant on this installation."""
+
+
 def _row_to_installation(row: sqlite3.Row) -> GitHubInstallation:
     return GitHubInstallation(
         id=row["id"],
@@ -42,19 +46,31 @@ def save_installation(
 ) -> GitHubInstallation:
     """Record (or re-record) an installation for this user.
 
-    `installation_id` is UNIQUE, so re-installing -- or a different Sentinels
-    user installing the App on an account someone else had linked -- updates
-    the existing row rather than creating a second one. GitHub only ever has
-    one installation per account per App, so two rows for one id would be a
-    lie about the world.
+    `installation_id` is UNIQUE and GitHub only ever has one installation per
+    account per App, so there is one row per id. Re-saving it for the *same*
+    user updates the row and clears `revoked_at`: a user who revokes and then
+    installs again has a live grant, and leaving the old timestamp in place
+    would make the new install permanently unusable.
 
-    Re-saving also clears `revoked_at`: a user who revokes and then installs
-    again has a live grant, and leaving the old timestamp in place would make
-    the new install permanently unusable.
+    A *different* user never takes over a live row: that raises
+    `InstallationOwnedByAnotherUser` and changes nothing. Whoever holds a grant
+    holds the App's write access to that account, so it can't move because
+    someone else presented the same number. A row its owner has revoked is
+    free to be claimed, since nobody is using it any more.
     """
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
     try:
+        existing = conn.execute(
+            "SELECT user_id, revoked_at FROM github_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        if (
+            existing is not None
+            and existing["user_id"] != user_id
+            and existing["revoked_at"] is None
+        ):
+            raise InstallationOwnedByAnotherUser(installation_id)
         conn.execute(
             """
             INSERT INTO github_installations

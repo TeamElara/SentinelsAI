@@ -79,6 +79,16 @@ Vercel → New Project → import this repo → set **Root Directory** to
   `github.com/settings/apps/<slug>` → Permissions & events first, then
   reinstall/accept the upgrade; there is nothing to configure per-installation
   until the App is requesting something.
+- On the App's settings page (`github.com/settings/apps/<slug>` → General →
+  Identifying and authorizing users), turn on **Request user authorization
+  (OAuth) during installation**. The install callback
+  (`/auth/github/install/callback`) needs the `code` GitHub then adds to prove
+  that the person finishing the install is the signed-in Sentinels user and can
+  access that installation. With the setting off, every install is refused with
+  "GitHub didn't confirm who you are during the install". The App must also be
+  allowed to read a collaborator's permission on a repository (Metadata: read);
+  Sentinels checks that the signed-in user can push to a repository before it
+  opens a fix pull request there, and treats anything it can't confirm as no.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

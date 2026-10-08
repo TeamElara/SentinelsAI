@@ -29,6 +29,16 @@ const INSTALL_ERRORS: Record<string, string> = {
   not_signed_in: "Your session ended before the install finished. Sign in and try again.",
   installation_lookup_failed:
     "GitHub wouldn't tell us which account that installation covers, so it wasn't saved.",
+  authorization_required:
+    "GitHub didn't confirm who you are during the install, so it wasn't saved. Try connecting again.",
+  authorization_failed:
+    "GitHub rejected the sign-in step of the install, so it wasn't saved. Try connecting again.",
+  identity_mismatch:
+    "The GitHub account that finished the install isn't the one you're signed in with, so it wasn't saved.",
+  installation_not_yours:
+    "That installation isn't one your GitHub account has access to, so it wasn't saved.",
+  installation_taken:
+    "Another Sentinels user already has that installation connected, so it wasn't saved.",
 };
 
 const SELECTION_LABEL: Record<string, string> = {

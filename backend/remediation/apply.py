@@ -44,6 +44,7 @@ from models import (
 )
 from remediation import pr_body
 from remediation.budget import MAX_FILES_PER_PR, MAX_PRS_PER_HOUR, MAX_PRS_PER_SCAN
+from remediation.access import RepoAccessError, require_write_access
 from remediation.github import GitHubWriteError, GitHubWriter, commit_files
 from remediation.linking import repo_target
 from remediation.patch import PlanValidationError, validate_plan
@@ -305,6 +306,17 @@ async def apply_fixes(
         # all, and the drift check must not mistake "you can't see it" for
         # "it was deleted".
         client.headers["Authorization"] = f"Bearer {installation_token.token}"
+
+        # An installation is a grant to the whole account. Whether *this
+        # person* may push to *this repository* is a separate question, and
+        # it is asked before any read of the repository's contents or any
+        # write -- including for a dry run.
+        try:
+            await require_write_access(
+                client, installation_token.token, owner, repo, user.github_login
+            )
+        except RepoAccessError as exc:
+            raise ApplyError(str(exc), status=exc.status) from exc
 
         writer = GitHubWriter(client, owner, repo, installation_token.token)
         try:
