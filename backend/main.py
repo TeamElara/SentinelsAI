@@ -13,6 +13,7 @@ import hmac
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,7 @@ from urllib.parse import urlparse
 
 import secrets
 
+import anyio
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -84,6 +86,7 @@ from remediation.registry import fixable_findings  # noqa: E402
 from remediation.tokens import fetch_installation  # noqa: E402
 from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
+from scan_limits import ScanBusy  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.account import delete_account  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
@@ -652,6 +655,10 @@ async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> S
     enforce_scan_rate_limit(user.id)
     try:
         return await run_scan(request.url, user_id=user.id)
+    except ScanBusy as exc:
+        # Not the client's mistake and not a server fault: too many scans are
+        # running right now. 429 tells a client to wait and try again.
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         # normalize_url's complaints (empty string, bad scheme, no host) are
         # the client's fault, not the server's — 400, not a 500 crash.
@@ -674,8 +681,51 @@ async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) ->
     enforce_scan_rate_limit(user.id)
     try:
         return await run_repo_scan(request.url, user_id=user.id)
+    except ScanBusy as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@asynccontextmanager
+async def _closing(stream):
+    """Close an async generator when the response using it ends, however it ends.
+
+    A browser that closes the tab cancels the response task mid-stream, and
+    leaves the scan generator suspended at its `yield` until the garbage
+    collector gets to it, so the scan's agents and sockets would keep running
+    in the meantime. Closing it here makes the generator's own `finally`
+    blocks (cancel the agents, close the client, free the scan slot) run at
+    once.
+
+    The close is shielded because the response task is being cancelled: an
+    unshielded `await` here would be cancelled again before the cleanup in
+    the generator could run.
+    """
+    try:
+        yield stream
+    finally:
+        with anyio.CancelScope(shield=True):
+            await stream.aclose()
+
+
+class SseResponse(StreamingResponse):
+    """A streaming response that closes its body generator when it ends.
+
+    Starlette doesn't. When the browser disconnects, the response task is
+    cancelled while it is awaiting the socket, and the body generator is left
+    suspended at its `yield` until the garbage collector finalizes it, so the
+    scan behind it would keep running (and keep its scan slot) in the meantime.
+    Closing the generator here raises GeneratorExit inside it at once, which is
+    what lets `_closing` (and the orchestrator's own `finally` blocks) run.
+    """
+
+    async def stream_response(self, send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.body_iterator.aclose()
 
 
 def _sse(event: str, data: str) -> str:
@@ -722,12 +772,13 @@ async def scan_stream(
 
     async def events():
         try:
-            async for event_name, payload in run_scan_stream(url, user_id=user.id):
-                yield _sse(event_name, payload.model_dump_json())
+            async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
+                async for event_name, payload in stream:
+                    yield _sse(event_name, payload.model_dump_json())
         except ValueError as exc:
             yield _sse("failed", json.dumps({"detail": str(exc)}))
 
-    return StreamingResponse(
+    return SseResponse(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
@@ -750,12 +801,13 @@ async def repo_scan_stream(
 
     async def events():
         try:
-            async for event_name, payload in run_repo_scan_stream(url, user_id=user.id):
-                yield _sse(event_name, payload.model_dump_json())
+            async with _closing(run_repo_scan_stream(url, user_id=user.id)) as stream:
+                async for event_name, payload in stream:
+                    yield _sse(event_name, payload.model_dump_json())
         except ValueError as exc:
             yield _sse("failed", json.dumps({"detail": str(exc)}))
 
-    return StreamingResponse(
+    return SseResponse(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},

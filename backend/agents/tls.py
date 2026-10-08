@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from agents.base import BaseAgent, ScanContext
 from models import EvidenceKind, Finding, Severity, Status
+from net.policy import ALLOWED_PORTS, BlockedTarget, resolve_and_check_sync
 
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
 
@@ -39,11 +40,31 @@ def fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, s
     does. If verification fails (expired, untrusted, wrong hostname), this
     raises `ssl.SSLError` before returning anything; that's caught one level
     up, in `TLSAgent.scan()`.
+
+    The socket goes to an address the outbound policy vetted, not to
+    `hostname` — handing the name to `create_connection` would resolve it
+    again, unchecked. `server_hostname` is still the name, so SNI and the
+    certificate check are unchanged. Raises `BlockedTarget` for a host the
+    policy refuses.
     """
+    if port not in ALLOWED_PORTS:
+        raise BlockedTarget("Only ports 80 and 443 can be scanned.")
+    addresses = resolve_and_check_sync(hostname)
+
     context = ssl.create_default_context()
-    with socket.create_connection((hostname, port), timeout=timeout) as sock:
-        with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-            return ssock.getpeercert(), ssock.version()
+    last_error: OSError | None = None
+    for address in addresses:
+        try:
+            sock = socket.create_connection((address, port), timeout=timeout)
+        except OSError as exc:
+            # This address is down; another vetted one may not be.
+            last_error = exc
+            continue
+        with sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                return ssock.getpeercert(), ssock.version()
+    assert last_error is not None  # resolve_and_check_sync never returns []
+    raise last_error
 
 
 class TLSAgent(BaseAgent):

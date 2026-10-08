@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 import db
+import net.policy
 
 # {path: (status_code, headers, body)}
 Routes = dict[str, tuple[int, dict[str, str], str]]
@@ -100,3 +101,24 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     db.init_db()
     return db.DB_PATH
+
+
+# A public address that stands in for "whatever this name resolves to".
+FAKE_PUBLIC_IP = "93.184.216.34"
+
+
+@pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):
+    """Keep the outbound policy off real DNS for every test.
+
+    `net.policy` resolves a scan target before anything connects to it. In
+    tests every name answers with one public address, so code under test
+    behaves as if its target were an ordinary public site. A test about the
+    policy itself passes its own resolver or replaces these again.
+    """
+
+    async def resolve(host: str) -> list[str]:
+        return [FAKE_PUBLIC_IP]
+
+    monkeypatch.setattr(net.policy, "system_resolver", resolve)
+    monkeypatch.setattr(net.policy, "system_resolver_sync", lambda host: [FAKE_PUBLIC_IP])
