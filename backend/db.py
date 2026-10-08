@@ -353,6 +353,43 @@ _V18_SCHEMA = """
 ALTER TABLE agent_runs ADD COLUMN coverage_json TEXT NOT NULL DEFAULT '[]';
 """
 
+_V17_SCHEMA = """
+CREATE TABLE usage (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0 CHECK(count >= 0),
+    PRIMARY KEY(user_id, day, kind)
+);
+CREATE TABLE global_usage (
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0 CHECK(count >= 0),
+    PRIMARY KEY(day, kind)
+);
+CREATE TABLE usage_reservations (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','completed','refunded')),
+    UNIQUE(user_id, kind, request_key)
+);
+CREATE INDEX idx_usage_reservations_active ON usage_reservations(created_at) WHERE state='active';
+CREATE TABLE scan_jobs (
+    id TEXT PRIMARY KEY REFERENCES usage_reservations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    scan_id TEXT REFERENCES scans(id) ON DELETE SET NULL,
+    error TEXT
+);
+"""
+
 # Version 15 is reserved for Track A's users.blocked migration. The ledger
 # below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
@@ -371,6 +408,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (13, _V13_SCHEMA),
     (14, _V14_SCHEMA),
     (16, _V16_SCHEMA),
+    (17, _V17_SCHEMA),
     (18, _V18_SCHEMA),
 ]
 

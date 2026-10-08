@@ -15,9 +15,10 @@
    the time `done` arrives, so the new page can fetch it immediately from
    `GET /scans/{id}` — hard-refresh works. */
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { streamScan, streamRepoScan, type AgentResult, type TargetType } from "@/lib/api";
+import { UsageBadge } from "@/components/UsageBadge";
 import { ScanProgress } from "@/components/ScanProgress";
 
 type ScanLauncherProps = {
@@ -49,6 +50,8 @@ export function ScanLauncher({
   targetType = "url",
 }: ScanLauncherProps) {
   const router = useRouter();
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
   const [url, setUrl] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +71,7 @@ export function ScanLauncher({
     setIsScanning(true);
 
     const stream = targetType === "repo" ? streamRepoScan : streamScan;
-    stream(url, {
+    stop.current = stream(url, {
       onAgent: (result) => {
         setAgentResults((prev) => ({ ...prev, [result.agent]: result }));
       },
@@ -131,6 +134,8 @@ export function ScanLauncher({
           {isScanning ? "Inspecting" : submitLabel}
         </button>
       </form>
+
+      <UsageBadge kind={targetType === "repo" ? "repo_scan" : "url_scan"} />
 
       {isScanning && <ScanProgress agentResults={agentResults} targetType={targetType} />}
 
