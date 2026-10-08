@@ -70,6 +70,12 @@ class TokenError(RuntimeError):
     back to."""
 
 
+class InstallationGone(TokenError):
+    """GitHub says this App has no such installation: it was uninstalled
+    there. Distinct from other token failures because the right response is to
+    stop using the grant, not to retry."""
+
+
 def get_app_id() -> str | None:
     return os.environ.get("GITHUB_APP_ID") or None
 
@@ -193,7 +199,7 @@ class AppTokenProvider(TokenProvider):
                 "that GITHUB_APP_PRIVATE_KEY_PATH points at this App's private key."
             )
         if response.status_code == 404:
-            raise TokenError(
+            raise InstallationGone(
                 f"Installation {installation_id} no longer exists for this App -- "
                 "it was probably uninstalled on GitHub."
             )

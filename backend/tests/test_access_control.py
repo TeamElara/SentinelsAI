@@ -43,6 +43,7 @@ OWN_AUTH = {
     ("GET", "/auth/github/callback"),
     ("GET", "/auth/github/install/callback"),
     ("POST", "/auth/logout"),
+    ("POST", "/github/webhook"),     # authenticated by GitHub's HMAC signature
 }
 
 SIGNED_IN = {

@@ -263,3 +263,7 @@ async def list_user_installation_ids(access_token: str) -> set[int] | None:
             if len(batch) < 100:
                 break
     return ids
+def get_webhook_secret() -> str | None:
+    """The secret GitHub signs webhook deliveries with, set on the App's
+    settings page. Without it no delivery can be verified, so none is read."""
+    return os.environ.get("GITHUB_APP_WEBHOOK_SECRET") or None

@@ -8,6 +8,8 @@ Run locally:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -55,6 +57,7 @@ from auth.github_oauth import (  # noqa: E402
     get_app_slug,
     get_callback_url,
     get_frontend_origin,
+    get_webhook_secret,
     install_url,
     list_user_installation_ids,
     missing_settings,
@@ -90,6 +93,7 @@ from storage.installations import (  # noqa: E402
     revoke_installation,
     save_installation,
 )
+from storage.installations import list_installations, revoke_installation, revoke_installation_everywhere, save_installation  # noqa: E402
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
 from storage.remediation import list_audit, list_audit_for_user, list_fix_applications  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
@@ -106,6 +110,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 # Creates backend/data/sentinels.db and brings its schema up to date if it
 # isn't already — safe to call on every startup (see db.init_db's docstring).
@@ -447,6 +453,53 @@ async def auth_install_callback(
     response = RedirectResponse(f"{frontend}/settings?installed={account}")
     response.delete_cookie("sentinels_install_state", path="/")
     return response
+
+
+# What GitHub's `installation` event says about an installation going away.
+# `unsuspend` is deliberately absent: a suspended installation was revoked here
+# and coming back means connecting it again, which re-runs the proof in the
+# install callback instead of trusting a webhook to restore write access.
+_INSTALLATION_ENDED = {"deleted", "suspend"}
+
+
+@app.post("/github/webhook")
+async def github_webhook(request: Request) -> dict:
+    """GitHub tells Sentinels when someone removes or suspends the App.
+
+    Without this, an uninstalled App still shows as connected here. The route
+    has no session — GitHub is the caller — so the request is authenticated by
+    the HMAC signature GitHub puts in `X-Hub-Signature-256`, computed with the
+    shared webhook secret over the raw body. The signature is checked before
+    the body is parsed, and compared in constant time.
+    """
+    secret = get_webhook_secret()
+    if secret is None:
+        raise HTTPException(status_code=503, detail="Webhooks are not configured. Missing: GITHUB_APP_WEBHOOK_SECRET.")
+
+    body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    supplied = request.headers.get("x-hub-signature-256", "")
+    if not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Invalid signature.")
+
+    event = request.headers.get("x-github-event", "")
+    if event == "ping":
+        return {"ok": True}
+    if event != "installation":
+        return {"ok": True, "ignored": event}
+
+    try:
+        payload = json.loads(body)
+        action = payload["action"]
+        installation_id = payload["installation"]["id"]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed installation event.")
+    if not isinstance(installation_id, int) or action not in _INSTALLATION_ENDED:
+        return {"ok": True, "ignored": f"installation.{action}"}
+
+    revoked = revoke_installation_everywhere(installation_id)
+    logger.info("github webhook: installation %s %s, %s grant(s) revoked", installation_id, action, revoked)
+    return {"ok": True, "revoked": revoked}
 
 
 @app.get("/installations", response_model=list[GitHubInstallation])

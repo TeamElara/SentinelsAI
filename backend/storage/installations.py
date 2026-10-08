@@ -168,3 +168,22 @@ def revoke_installation(user_id: int, installation_id: int) -> bool:
         return cursor.rowcount > 0
     finally:
         conn.close()
+
+
+def revoke_installation_everywhere(installation_id: int) -> int:
+    """Mark an installation unusable for whoever holds it, because GitHub says
+    it is gone (uninstalled or suspended there). Returns how many live rows
+    that changed; 0 means there was nothing live to change, which is a normal
+    answer to a repeated or unknown event.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE github_installations SET revoked_at = ? "
+            "WHERE installation_id = ? AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), installation_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
