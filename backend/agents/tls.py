@@ -118,6 +118,11 @@ class TLSAgent(BaseAgent):
             cert, protocol_version = await asyncio.to_thread(
                 fetch_certificate, hostname, port, 10.0
             )
+        except BlockedTarget as exc:
+            status = "unavailable" if exc.reason == "That host could not be resolved." else "skipped"
+            for check in self.checks:
+                record(check, status, exc.reason)
+            return []
         except ssl.SSLError as exc:
             record(self.checks[0], "completed", "HTTPS was attempted.")
             record(self.checks[1], "completed", "TLS verification failed and is reported as a finding.")

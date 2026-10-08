@@ -45,6 +45,7 @@ async def check(args):
             messages = []
             page.on('console', lambda message: messages.append(message.text))
             health_calls, streams = [], []
+            pdf_available = True
             if args.local_fixtures:
                 fixture = {'id':'browser-fixture','url':'https://example.com','target_type':'url',
                     'scanned_at':'2026-10-08T10:00:00Z','duration_ms':1,'score':100,'grade':'A',
@@ -63,6 +64,8 @@ async def check(args):
                             await route.fulfill(json={'status': 'ok'})
                         except Exception:
                             pass  # First request is intentionally aborted at three seconds.
+                    elif path == '/export/formats':
+                        await route.fulfill(json=[{'format_id':'pdf'}] if pdf_available else [{'format_id':'json'}])
                     elif path == '/usage':
                         await route.fulfill(json={'budgets': {key: {'remaining': 7, 'limit': 10} for key in ('url_scan','repo_scan','pdf','verify','ai_fix','chat')}})
                     elif path == '/scan/stream':
@@ -99,6 +102,11 @@ async def check(args):
                 result['browser']['cold_start'] = {'probes':len(health_calls),'streams':len(streams),'retry_interval_seconds':round(health_calls[1]-health_calls[0],2)}
                 result['browser']['incomplete_coverage_visible'] = True
                 result['browser']['pdf_429_message_visible'] = True
+                pdf_available = False
+                await page.reload()
+                await page.get_by_text('Provisional score and grade:', exact=False).wait_for()
+                assert await page.get_by_role('button', name='Download PDF', exact=True).count() == 0
+                result['browser']['disabled_pdf_button_hidden'] = True
             assert not any('Content Security Policy' in message or 'violates' in message.lower() for message in messages), messages
             result['browser']['normal_flow_csp_violations'] = []
 

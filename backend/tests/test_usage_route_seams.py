@@ -135,6 +135,7 @@ def test_cross_site_and_unowned_actions_use_no_budget(account, routes):
 
 
 def test_pdf_failure_refunds_and_legacy_alias_reloads_owned_report(account, routes, monkeypatch):
+    monkeypatch.setenv('SENTINELS_PDF_ENABLED', 'true')
     module, client = routes
     report = ScanReport(id='owned', url='https://example.com', scanned_at='now', duration_ms=1, score=50, grade='F')
     save_scan(report, user_id=account.id)

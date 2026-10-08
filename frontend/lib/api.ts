@@ -775,6 +775,13 @@ export async function fetchChatHistory(scanId: string): Promise<ChatMessage[]> {
  * prints exactly the report handed to it, so the file always matches what's
  * on screen (see the endpoint's docstring in `backend/main.py`).
  */
+export async function fetchExportFormats(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/export/formats`, withAuth());
+  if (!response.ok) throw new Error("Couldn't load export formats.");
+  const formats: { format_id: string }[] = await response.json();
+  return formats.map((format) => format.format_id);
+}
+
 export async function downloadReportPdf(report: ScanReport): Promise<void> {
   const response = await fetch(`${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`, withAuth());
   checkAuth(response);

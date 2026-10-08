@@ -82,6 +82,9 @@ async def scan_operation(user_id, kind, operation):
 
 
 async def pdf_operation(user_id, operation):
+    from report.pdf import PdfDisabled, pdf_enabled
+    if not pdf_enabled():
+        raise PdfDisabled()
     async def render():
         async with _pdf_slots:
             return await operation()

@@ -245,13 +245,16 @@ async def test_fetch_certificate_still_rejects_a_certificate_for_another_name(tm
     assert asked == [(FAKE_PUBLIC_IP, 443)]
 
 
-async def test_tls_agent_reports_a_blocked_host_as_an_agent_error(no_sockets, mock_site):
+async def test_tls_agent_records_blocked_host_as_skipped(no_sockets, mock_site):
     client = mock_site({})
     result = await TLSAgent().run(ScanContext(url="https://127.0.0.1", client=client))
     await client.aclose()
 
     assert result.findings == []
-    assert "BlockedTarget" in result.error
+    assert result.error is None
+    assert result.coverage_status == "skipped"
+    assert len(result.coverage) == len(TLSAgent.checks)
+    assert all(c.status == "skipped" and c.reason for c in result.coverage)
 
 
 # --- subdomain agent ---------------------------------------------------------
@@ -297,10 +300,11 @@ async def test_internally_resolving_subdomain_is_skipped_not_contacted(monkeypat
     assert "intranet.example.com" not in handshakes
     assert "www.example.com" in contacted
 
-    skipped = [f for f in result.findings if f.id == "subdomain-internal-skipped"]
+    skipped = [c for c in result.coverage if c.status == "skipped"]
     assert len(skipped) == 1
-    assert "intranet.example.com" in skipped[0].evidence
-    assert "www.example.com" not in skipped[0].evidence
+    assert "intranet.example.com" in skipped[0].check
+    assert "www.example.com" not in skipped[0].check
+    assert not [f for f in result.findings if f.id == "subdomain-internal-skipped"]
     # Skipped is "not checked", so nothing is claimed about the host itself.
     assert not [f for f in result.findings if f.affected_url and "intranet" in f.affected_url]
     # It still appears in the inventory.

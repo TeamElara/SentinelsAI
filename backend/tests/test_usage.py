@@ -184,11 +184,7 @@ async def test_global_exhaustion_preserves_summary_and_refunds_interactive(accou
 
 
 async def test_b4_busy_rejection_refunds_and_job_deadline_closes_runner(account, monkeypatch):
-    import sys
-    import types
-    class ScanBusy(ValueError):
-        pass
-    monkeypatch.setitem(sys.modules, 'scan_limits', types.SimpleNamespace(ScanBusy=ScanBusy))
+    from scan_limits import ScanBusy
     async def busy():
         raise ScanBusy('You already have a scan running.')
     with pytest.raises(HTTPException) as exc:

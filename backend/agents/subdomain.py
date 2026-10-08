@@ -125,7 +125,9 @@ async def _is_scannable(hostname: str) -> bool:
     """
     try:
         await resolve_and_check(hostname)
-    except BlockedTarget:
+    except BlockedTarget as exc:
+        status = "unavailable" if exc.reason == "That host could not be resolved." else "skipped"
+        record(f"Subdomain follow-up {hostname}", status, exc.reason)
         return False
     return True
 
@@ -225,8 +227,6 @@ class SubdomainAgent(BaseAgent):
 
         if not entries:
             findings.append(self._clean_finding())
-        if skipped:
-            findings.append(self._skipped_finding(skipped))
         if dns_budget.partial or http_budget.partial:
             findings.append(self._partial_finding())
 
@@ -471,22 +471,6 @@ class SubdomainAgent(BaseAgent):
             owasp=OWASP_MISCONFIG,
             evidence=evidence_text,
             evidence_items=[self.evidence(EvidenceKind.DNS_RECORD, "Subdomain discovery", evidence_text)],
-        )
-
-    def _skipped_finding(self, hosts: list[str]) -> Finding:
-        evidence_text = (
-            f"{len(hosts)} discovered host(s) resolve to a private, local or reserved "
-            f"address and were not contacted: {', '.join(sorted(hosts))}."
-        )
-        return Finding(
-            id="subdomain-internal-skipped",
-            title="Internal-only subdomains were skipped",
-            category="Subdomain",
-            severity=Severity.INFO,
-            status=Status.PASS,
-            owasp=OWASP_MISCONFIG,
-            evidence=evidence_text,
-            evidence_items=[self.evidence(EvidenceKind.DNS_RECORD, "Hosts not contacted", evidence_text)],
         )
 
     def _partial_finding(self) -> Finding:
