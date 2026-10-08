@@ -3,7 +3,7 @@
 Every other route in this project is verified live/by hand rather than
 through `fastapi.testclient` (see the "Live-verified" notes throughout
 PLAN-v5.md) -- but Stage E's own verification section explicitly asks for a
-`TestClient` pass over these two endpoints (401 unauthenticated, 403 on
+`TestClient` pass over these two endpoints (401 unauthenticated, 404 on
 `GET /scans/{id}/audit` for another user's scan), and unlike a route that
 writes to GitHub, importing `main` here does nothing except define routes
 against a `temp_db` -- no installation token, no network call, nothing to
@@ -94,7 +94,7 @@ def test_get_scan_audit_404s_for_an_unknown_scan(client):
     assert res.status_code == 404
 
 
-def test_get_scan_audit_403s_for_another_user_s_scan(client):
+def test_get_scan_audit_404s_for_another_user_s_scan(client):
     from storage.remediation import write_audit
 
     owner, _ = _signed_in_cookie(1, "owner")
@@ -104,7 +104,7 @@ def test_get_scan_audit_403s_for_another_user_s_scan(client):
 
     client.cookies.set("sentinels_session", other_cookie)
     res = client.get("/scans/scan1/audit")
-    assert res.status_code == 403
+    assert res.status_code == 404
 
 
 def test_get_scan_audit_succeeds_for_the_owner(client):
@@ -120,7 +120,7 @@ def test_get_scan_audit_succeeds_for_the_owner(client):
     assert [row["action"] for row in res.json()] == ["pr_opened"]
 
 
-def test_get_scan_audit_is_readable_for_an_unowned_legacy_scan(client):
+def test_get_scan_audit_404s_for_an_unowned_legacy_scan(client):
     from storage.remediation import write_audit
 
     _save_scan("scan1", None)
@@ -129,4 +129,4 @@ def test_get_scan_audit_is_readable_for_an_unowned_legacy_scan(client):
     _, cookie = _signed_in_cookie(1, "anyone")
     client.cookies.set("sentinels_session", cookie)
     res = client.get("/scans/scan1/audit")
-    assert res.status_code == 200
+    assert res.status_code == 404
