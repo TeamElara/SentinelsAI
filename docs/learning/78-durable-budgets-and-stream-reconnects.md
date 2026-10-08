@@ -36,9 +36,10 @@ prepared integration against A1 commit 8273a5a. Regenerate it against the merged
 tree with `python backend/scripts/prepare_usage_integration.py --output
 integration/c7-main-after-ownership.patch`, review it, then apply with `git apply`.
 The generator refuses a tree without the ownership helper and cross-site guard.
-Keep A5's beta/kill-switch checks and A6's permission check when integrating
-their routes; the patch is a seam draft and must be regenerated/adapted after
-those changes. A4's stored-report-only PDF contract is preserved by the alias.
+The generator preserves A5's route dependencies and A6's request type,
+permission parameter and permission checks before charging. A4 removes the
+PDF alias; regeneration never restores it. If the alias still exists before
+A4 lands, the draft makes it reload only an owned stored report.
 
 The route seam harness tests the prepared patch, including ownership before
 charging, cross-site rejection, REST/stream sharing, reconnect, stored PDF

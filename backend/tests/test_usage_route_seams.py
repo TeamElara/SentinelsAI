@@ -34,10 +34,17 @@ def reject_cross_site_scan_start(request):
 '''
 
 
+def guarded_source():
+    source = (Path(__file__).resolve().parents[1] / 'main.py').read_text(encoding='utf-8')
+    source = source.replace('async def scan_stream(url: str, user:', 'async def scan_stream(url: str, request: Request, user:')
+    source = source.replace('async def repo_scan_stream(url: str, user:', 'async def repo_scan_stream(url: str, request: Request, user:')
+    return source + OWNERSHIP_SEAM
+
+
 @pytest.fixture
 def routes(account, monkeypatch):
     source_path = Path(__file__).resolve().parents[1] / 'main.py'
-    source = source_path.read_text(encoding='utf-8') + OWNERSHIP_SEAM
+    source = guarded_source()
     module = types.ModuleType('usage_route_fixture')
     module.__file__ = str(source_path)
     monkeypatch.setitem(sys.modules, module.__name__, module)
@@ -53,6 +60,34 @@ def test_patch_rejects_unprotected_main():
     source = (Path(__file__).resolve().parents[1] / 'main.py').read_text(encoding='utf-8')
     with pytest.raises(ValueError, match='prerequisite'):
         transform(source)
+
+
+def test_generator_preserves_permission_statement_and_route_dependencies():
+    import ast
+    source = guarded_source()
+    source = source.replace('async def scan(request: ScanRequest,', 'async def scan(request: UrlScanRequest,')
+    source = source.replace('    enforce_scan_rate_limit(user.id)', '    require_permission(request.permission_confirmed, user, request.url)\n    enforce_scan_rate_limit(user.id)', 1)
+    source = source.replace('url: str, request: Request, user:', 'url: str, request: Request, permission_confirmed: bool = False, user:')
+    source = source.replace('    enforce_scan_rate_limit(user.id)\n\n    async def events():', '    require_permission(permission_confirmed, user, url)\n    enforce_scan_rate_limit(user.id)\n\n    async def events():')
+    source = source.replace('@app.post("/scan", response_model=ScanReport)', '@app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])')
+    updated = transform(source)
+    functions = {node.name:node for node in ast.parse(updated).body if isinstance(node, ast.AsyncFunctionDef)}
+    assert functions['scan'].args.args[0].annotation.id == 'UrlScanRequest'
+    assert functions['scan'].body[0].value.func.id == 'require_permission'
+    assert 'Depends(require_scans_running)' in ast.unparse(functions['scan'].decorator_list[0])
+    stream = functions['scan_stream']
+    assert [n.arg for n in stream.args.args] == ['url','request','request_id','permission_confirmed','user']
+    assert stream.body[0].value.func.id == 'reject_cross_site_scan_start'
+    assert stream.body[1].value.func.id == 'require_permission'
+
+
+def test_generator_does_not_restore_removed_pdf_alias():
+    import ast
+    source = guarded_source()
+    node = next(n for n in ast.parse(source).body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'scan_pdf')
+    lines = source.splitlines(keepends=True)
+    del lines[node.decorator_list[0].lineno-1:node.end_lineno]
+    assert 'async def scan_pdf(' not in transform(''.join(lines))
 
 
 def test_rest_and_stream_share_daily_budget_and_reconnect(account, routes, monkeypatch):
