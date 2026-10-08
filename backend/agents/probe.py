@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 import httpx
-from scan_coverage import record
+from scan_coverage import record, record_response
 
 if TYPE_CHECKING:
     from agents.base import ScanContext
@@ -82,7 +82,9 @@ class ResponseCache:
                     client.request(method, url, follow_redirects=follow_redirects, timeout=timeout)
                 )
                 self._tasks[key] = task
-        return await task
+        response = await task
+        record_response(response)
+        return response
 
 
 async def safe_get(

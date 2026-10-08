@@ -18,6 +18,13 @@ Review: [PR #32](https://github.com/TeamElara/SentinelsAI/pull/32).
 - Deadline results retain their existing error for compatibility and now
   include explicit `failed` coverage. Reports remain provisional; coverage
   persists through the existing C2 storage and export paths.
+- Size-capped bodies receive `partial`; unsupported, corrupt or truncated
+  compressed bodies receive `unavailable`. Shared response-cache metadata
+  attributes the limitation to every consuming agent, including reconnecting
+  concurrent callers, rather than only the task that started the fetch.
+  Six regressions cover plain/gzip caps, unsupported encodings, corrupt and
+  truncated gzip, and an ordinary completed body. HEAD requests have no body
+  to inspect and do not acquire a fabricated body failure.
 - `/export/formats` advertises PDF only while `pdf_enabled()` is true. The
   dashboard loads that list and hides Download PDF when disabled or when
   the formats request fails. Disabled PDF never reserves quota.

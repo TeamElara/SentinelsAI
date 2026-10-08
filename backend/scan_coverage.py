@@ -28,6 +28,13 @@ def record(check: str, status: str, reason: str, *, required: bool = True):
             records.append(entry)
 
 
+def record_response(response):
+    """Attribute a limited cached body to every agent that consumes it."""
+    observation = response.extensions.get('sentinels_body_coverage', {})
+    if observation.get('status'):
+        record(observation['check'], observation['status'], observation['reason'])
+
+
 def finish(checks, findings, error, records):
     if error:
         status, reason = "failed", error

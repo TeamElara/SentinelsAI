@@ -8,6 +8,8 @@ from fastapi import HTTPException
 import budgeted_operations as ops
 import net.policy
 import httpcore
+import httpx
+import gzip
 from net.client import PolicyBackend
 from agents.base import ScanContext
 from agents.subdomain import _is_scannable
@@ -133,3 +135,37 @@ def test_tls_does_not_restart_timeout_for_every_address(monkeypatch):
     with pytest.raises(TimeoutError, match='budget exhausted'):
         tls.fetch_certificate('example.com', 443, 10)
     assert seen == [(('93.184.216.34', 443), 9)]
+
+
+@pytest.mark.parametrize('body,encoding,status', [
+    (b'x' * (2 * 1024 * 1024 + 32), 'identity', 'partial'),
+    (gzip.compress(b'x' * (2 * 1024 * 1024 + 32)), 'gzip', 'partial'),
+    (b'unsupported', 'br', 'unavailable'),
+    (b'corrupt', 'gzip', 'unavailable'),
+    (gzip.compress(b'normal')[:-5], 'gzip', 'unavailable'),
+    (b'normal', 'identity', None),
+], ids=['plain-cap','gzip-cap','unsupported-encoding','corrupt-gzip','truncated-gzip','complete-body'])
+async def test_limited_cached_body_records_coverage_for_every_consumer(body, encoding, status):
+    from agents.base import BaseAgent
+    from agents.probe import safe_get
+    from net.client import PolicyTransport
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, stream=httpx.ByteStream(body), headers={'content-encoding':encoding})
+    class Consumer(BaseAgent):
+        name = 'body-consumer'
+        checks = ['Page inspection']
+        async def scan(self, context):
+            assert await safe_get(context, context.url) is not None
+            return []
+    async with httpx.AsyncClient(transport=PolicyTransport(httpx.MockTransport(handle))) as client:
+        context = ScanContext(url='https://example.com', client=client)
+        results = await asyncio.gather(Consumer().run(context), Consumer().run(context))
+    assert len(calls) == 1
+    for result in results:
+        if status is None:
+            assert result.coverage_status == 'completed'
+        else:
+            assert result.coverage_status != 'completed'
+            assert any(c.status == status and c.check.endswith('response body') for c in result.coverage)
