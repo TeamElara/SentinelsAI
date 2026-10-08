@@ -1,9 +1,12 @@
 """Every route that takes a scan id only works for that scan's owner, and the
 stream routes refuse a scan started from another website (Launch Plan A1).
 
-Someone else's scan, an unowned (pre-Stage-0) scan and a scan that doesn't
-exist must all look identical from outside: the same 404 with the same
-detail, so a stranger can't learn whether an id is real.
+The "another user, unowned scan and missing scan all get the same 404, and no
+sign-in gets 401" checks for every route live in `test_access_control.py`,
+which walks `app.routes` so a new route can't be left out. This file keeps what
+that one can't derive from a route: the owner still being able to use their own
+scan, writes by another user changing nothing, the scan list, and the stream
+routes' cross-site check.
 
 Uses the same `TestClient` + signed-cookie setup as `test_main_audit.py`.
 """
@@ -16,31 +19,6 @@ import pytest
 from tests.test_main_audit import SECRET, _signed_in_cookie  # noqa: F401
 
 SCAN_ID = "scan-owned-by-alice"
-
-# (method, path, JSON body). `{id}` is filled with the scan id under test.
-SCAN_ROUTES = [
-    ("GET", "/scans/{id}", None),
-    ("DELETE", "/scans/{id}", None),
-    ("GET", "/scans/{id}/agents/headers", None),
-    ("GET", "/scans/{id}/files", None),
-    ("GET", "/scans/{id}/checklist", None),
-    ("POST", "/scans/{id}/checklist/some-item", {"state": "pass"}),
-    ("POST", "/scans/{id}/findings/missing-csp/fix", None),
-    ("GET", "/scans/{id}/fix/summary", None),
-    ("GET", "/scans/{id}/findings/missing-csp/fix/plan", None),
-    ("POST", "/scans/{id}/fix/plan", {"finding_keys": ["missing-csp"]}),
-    ("GET", "/scans/{id}/fix/bundle.zip", None),
-    ("POST", "/scans/{id}/fix/apply", {"finding_keys": ["missing-csp"]}),
-    ("GET", "/scans/{id}/fix/applications", None),
-    ("POST", "/scans/{id}/findings/missing-csp/verify", None),
-    ("GET", "/scans/{id}/audit", None),
-    ("POST", "/scans/{id}/chat", {"question": "Is this site safe?"}),
-    ("GET", "/scans/{id}/chat", None),
-    ("GET", "/scans/{id}/export/json", None),
-    ("POST", "/scans/{id}/link-repo", {"installation_id": 1, "repo": "demo"}),
-    ("GET", "/scans/{id}/link-repo", None),
-    ("DELETE", "/scans/{id}/link-repo", None),
-]
 
 # Routes the owner can call here without reaching GitHub, Groq or the network.
 OWNER_READ_ROUTES = [
@@ -84,57 +62,6 @@ def _save_url_scan(scan_id: str, user_id: int | None) -> None:
         ],
     )
     save_scan(report, user_id=user_id)
-
-
-def _request(client, method: str, path: str, body):
-    return client.request(method, path.format(id=SCAN_ID), json=body)
-
-
-def _not_found_detail() -> str:
-    return f"Scan {SCAN_ID!r} not found"
-
-
-@pytest.mark.parametrize("method,path,body", SCAN_ROUTES)
-def test_another_user_gets_the_same_404_as_a_missing_scan(client, method, path, body):
-    alice, _ = _signed_in_cookie(1, "alice")
-    _, bob_cookie = _signed_in_cookie(2, "bob")
-    _save_url_scan(SCAN_ID, alice.id)
-
-    client.cookies.set("sentinels_session", bob_cookie)
-    res = _request(client, method, path, body)
-
-    assert res.status_code == 404
-    assert res.json()["detail"] == _not_found_detail()
-
-
-@pytest.mark.parametrize("method,path,body", SCAN_ROUTES)
-def test_an_unowned_legacy_scan_is_closed_to_everyone(client, method, path, body):
-    _, cookie = _signed_in_cookie(1, "alice")
-    _save_url_scan(SCAN_ID, None)
-
-    client.cookies.set("sentinels_session", cookie)
-    res = _request(client, method, path, body)
-
-    assert res.status_code == 404
-    assert res.json()["detail"] == _not_found_detail()
-
-
-@pytest.mark.parametrize("method,path,body", SCAN_ROUTES)
-def test_a_missing_scan_gets_the_same_404(client, method, path, body):
-    _, cookie = _signed_in_cookie(1, "alice")
-
-    client.cookies.set("sentinels_session", cookie)
-    res = _request(client, method, path, body)
-
-    assert res.status_code == 404
-    assert res.json()["detail"] == _not_found_detail()
-
-
-@pytest.mark.parametrize("method,path,body", SCAN_ROUTES)
-def test_every_scan_route_still_requires_sign_in(client, method, path, body):
-    _save_url_scan(SCAN_ID, None)
-    res = _request(client, method, path, body)
-    assert res.status_code == 401
 
 
 @pytest.mark.parametrize("path", OWNER_READ_ROUTES)
