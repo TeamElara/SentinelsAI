@@ -79,6 +79,19 @@ Vercel → New Project → import this repo → set **Root Directory** to
   `github.com/settings/apps/<slug>` → Permissions & events first, then
   reinstall/accept the upgrade; there is nothing to configure per-installation
   until the App is requesting something.
+- Set the beta gate before inviting anyone (all in `backend/.env.example`):
+  `SENTINELS_ALLOWED_GITHUB_IDS` (numeric GitHub ids of the people you invited)
+  and `SENTINELS_ENABLED_FIXERS` (leave it unset and **no** fixer can open a
+  pull request on a deployment; list a fixer's slug only after it has been
+  through a real preview → apply → merge → verify cycle). To stop one account,
+  from a Render shell in `backend/`:
+  `python -c "from storage.users import set_blocked; print(set_blocked('login', True))"`.
+- The emergency switches are `SENTINELS_SCANS_PAUSED=1` (no new scans or
+  re-verifications) and `SENTINELS_WRITES_PAUSED=1` (no new pull requests;
+  previews still work). Render restarts the service when an environment
+  variable changes, so they take effect after the restart, not instantly. Flip
+  one on the real service once and write the measured time here:
+  **not measured yet**.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

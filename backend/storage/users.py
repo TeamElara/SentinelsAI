@@ -136,3 +136,40 @@ def purge_expired_sessions() -> int:
         return cursor.rowcount
     finally:
         conn.close()
+
+
+def is_blocked(user_id: int) -> bool:
+    """Whether this account has been stopped. False for an unknown id."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT blocked FROM users WHERE id = ?", (user_id,)).fetchone()
+        return bool(row["blocked"]) if row is not None else False
+    finally:
+        conn.close()
+
+
+def is_github_id_blocked(github_id: int) -> bool:
+    """Same check before a session exists, keyed on the GitHub id sign-in has."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT blocked FROM users WHERE github_id = ?", (github_id,)
+        ).fetchone()
+        return bool(row["blocked"]) if row is not None else False
+    finally:
+        conn.close()
+
+
+def set_blocked(github_login: str, blocked: bool) -> bool:
+    """Stop (or release) the account with this GitHub login. False if no such
+    user. Existing sessions stop working on their next request."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE users SET blocked = ? WHERE LOWER(github_login) = LOWER(?)",
+            (1 if blocked else 0, github_login),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()

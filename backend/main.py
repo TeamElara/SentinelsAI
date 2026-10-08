@@ -46,6 +46,8 @@ from ai.client import get_api_key  # noqa: E402
 from ai.fixes import get_or_generate_fix  # noqa: E402
 from ai.prompts import PROMPT_VERSION  # noqa: E402
 from auth.deps import current_user, optional_user  # noqa: E402
+from auth.gate import sign_in_refusal  # noqa: E402
+from auth.switches import require_scans_running, require_writes_running  # noqa: E402
 from auth.github_oauth import (  # noqa: E402
     authorize_url,
     exchange_code,
@@ -290,6 +292,10 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
     if identity is None:
         return _fail("identity_failed")
 
+    refusal = sign_in_refusal(identity.github_id)
+    if refusal is not None:
+        return _fail(refusal)
+
     session_token = new_token()
     sign_in(
         github_id=identity.github_id,
@@ -504,7 +510,7 @@ def scan_unlink_repo(scan_id: str, user: User = Depends(current_user)) -> Respon
     return Response(status_code=204)
 
 
-@app.post("/scan", response_model=ScanReport)
+@app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
 async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against `request.url` and return the report.
 
@@ -521,7 +527,7 @@ async def scan(request: ScanRequest, user: User = Depends(current_user)) -> Scan
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/repo/scan", response_model=ScanReport)
+@app.post("/repo/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
 async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against a public GitHub repo (`request.url`) and
     return the report. The repo-side sibling of `POST /scan` -- same
@@ -548,7 +554,7 @@ def _sse(event: str, data: str) -> str:
     return f"event: {event}\ndata: {data}\n\n"
 
 
-@app.get("/scan/stream")
+@app.get("/scan/stream", dependencies=[Depends(require_scans_running)])
 async def scan_stream(
     url: str, request: Request, user: User = Depends(current_user)
 ) -> StreamingResponse:
@@ -593,7 +599,7 @@ async def scan_stream(
     )
 
 
-@app.get("/repo/stream")
+@app.get("/repo/stream", dependencies=[Depends(require_scans_running)])
 async def repo_scan_stream(
     url: str, request: Request, user: User = Depends(current_user)
 ) -> StreamingResponse:
@@ -896,6 +902,8 @@ async def scan_fix_apply(
     are created. Sentinels never merges it.
     """
     report = load_owned_scan(scan_id, user)
+    if not body.dry_run:
+        require_writes_running()
 
     try:
         return await apply_fixes(report, user, body.finding_keys, dry_run=body.dry_run)
@@ -919,7 +927,9 @@ async def scan_fix_applications(
 
 
 @app.post(
-    "/scans/{scan_id}/findings/{finding_key}/verify", response_model=VerificationResult
+    "/scans/{scan_id}/findings/{finding_key}/verify",
+    response_model=VerificationResult,
+    dependencies=[Depends(require_scans_running)],
 )
 async def finding_verify(
     scan_id: str, finding_key: str, user: User = Depends(current_user)
