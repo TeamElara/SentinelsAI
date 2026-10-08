@@ -5,6 +5,7 @@ cross-site guard are required. Run the route-ownership suite before applying.
 """
 import argparse
 import ast
+import copy
 import difflib
 from pathlib import Path
 
@@ -17,15 +18,31 @@ def transform(source):
             raise ValueError(f'A1/A2 prerequisite missing: {prerequisite}')
     replacements = {}
     for name, kind, runner in [('scan','url_scan','run_scan'),('repo_scan','repo_scan','run_repo_scan')]:
-        replacements[name] = f'''async def {name}(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+        args = ast.unparse(functions[name].args)
+        permission = ''.join('    ' + ast.unparse(statement) + '\n' for statement in functions[name].body
+                             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+                             and isinstance(statement.value.func, ast.Name) and statement.value.func.id == 'require_permission')
+        replacements[name] = f'''async def {name}({args}) -> ScanReport:
+{permission}\
     try:
         return await scan_operation(user.id, '{kind}', lambda: {runner}(request.url, user_id=user.id))
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
 '''
     for name, kind, runner in [('scan_stream','url_scan','run_scan_stream'),('repo_scan_stream','repo_scan','run_repo_scan_stream')]:
-        replacements[name] = f'''async def {name}(url: str, request: Request, request_id: str, user: User = Depends(current_user)) -> StreamingResponse:
+        arguments = copy.deepcopy(functions[name].args)
+        if 'request' not in {arg.arg for arg in arguments.args}:
+            raise ValueError(f'A1 request guard missing in {name}')
+        if 'request_id' in {arg.arg for arg in arguments.args}:
+            raise ValueError('C7 is already integrated; do not apply twice')
+        arguments.args.insert(2, ast.arg(arg='request_id', annotation=ast.Name(id='str', ctx=ast.Load())))
+        args = ast.unparse(arguments)
+        permission = ''.join('    ' + ast.unparse(statement) + '\n' for statement in functions[name].body
+                             if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+                             and isinstance(statement.value.func, ast.Name) and statement.value.func.id == 'require_permission')
+        replacements[name] = f'''async def {name}({args}) -> StreamingResponse:
     reject_cross_site_scan_start(request)
+{permission}\
     async def events():
         async for event, payload in {runner}(url, user_id=user.id):
             yield event, payload.model_dump_json()
@@ -64,6 +81,8 @@ def transform(source):
     # Compatibility body supplies only an ID; all printable data is reloaded.
     return await scan_export(report.id, 'pdf', user)
 '''
+    if 'scan_pdf' not in functions:
+        del replacements['scan_pdf']  # A4 removes this legacy endpoint; never restore it.
     lines = source.splitlines(keepends=True)
     for name, text in sorted(replacements.items(), key=lambda item: functions[item[0]].lineno, reverse=True):
         node = functions[name]

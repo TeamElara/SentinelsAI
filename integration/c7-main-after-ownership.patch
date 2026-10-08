@@ -8,10 +8,11 @@
  from rate_limit import enforce_scan_rate_limit  # noqa: E402
  from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
  from remediation.patch import PlanValidationError  # noqa: E402
-@@ -506,39 +507,18 @@
+@@ -505,40 +506,19 @@
+ 
  
  @app.post("/scan", response_model=ScanReport)
- async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+-async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
 -    """Run a full scan against `request.url` and return the report.
 -
 -    `async def` here (unlike `/health`'s plain `def`) because this endpoint
@@ -19,6 +20,7 @@
 -    the agents it calls.
 -    """
 -    enforce_scan_rate_limit(user.id)
++async def scan(request: ScanRequest, user: User=Depends(current_user)) -> ScanReport:
      try:
 -        return await run_scan(request.url, user_id=user.id)
 +        return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
@@ -30,7 +32,7 @@
  
  
  @app.post("/repo/scan", response_model=ScanReport)
- async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+-async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
 -    """Run a full scan against a public GitHub repo (`request.url`) and
 -    return the report. The repo-side sibling of `POST /scan` -- same
 -    request/response shape, same 400-on-ValueError contract, a different
@@ -43,6 +45,7 @@
 -    every other milestone in this codebase has been.
 -    """
 -    enforce_scan_rate_limit(user.id)
++async def repo_scan(request: ScanRequest, user: User=Depends(current_user)) -> ScanReport:
      try:
 -        return await run_repo_scan(request.url, user_id=user.id)
 +        return await scan_operation(user.id, 'repo_scan', lambda: run_repo_scan(request.url, user_id=user.id))
@@ -83,7 +86,7 @@
 -    The cross-site check runs before the rate limiter, so a refused request
 -    never uses up any of the user's scans.
 -    """
-+async def scan_stream(url: str, request: Request, request_id: str, user: User = Depends(current_user)) -> StreamingResponse:
++async def scan_stream(url: str, request: Request, request_id: str, user: User=Depends(current_user)) -> StreamingResponse:
      reject_cross_site_scan_start(request)
 -    enforce_scan_rate_limit(user.id)
 -
@@ -115,7 +118,7 @@
 -    committed by the time it's known), a different generator underneath
 -    (`repo_orchestrator.run_repo_scan_stream`).
 -    """
-+async def repo_scan_stream(url: str, request: Request, request_id: str, user: User = Depends(current_user)) -> StreamingResponse:
++async def repo_scan_stream(url: str, request: Request, request_id: str, user: User=Depends(current_user)) -> StreamingResponse:
      reject_cross_site_scan_start(request)
 -    enforce_scan_rate_limit(user.id)
 -
