@@ -22,7 +22,7 @@ export function startScanStream(base: string, path: string, url: string, handler
     for (let attempt = 0; attempt < 4 && !finished && !controller.signal.aborted; attempt++) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
-        const response = await fetch(address, { credentials: 'include', signal: controller.signal });
+        const response = await fetch(address, { credentials: 'include', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(165000)]) });
         refresh();
         if (!response.ok) {
           const body = await response.json().catch(() => ({})) as { detail?: string };

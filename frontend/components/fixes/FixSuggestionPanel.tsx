@@ -23,13 +23,21 @@ type State =
 
 export function FixSuggestionPanel({ scanId, findingKey }: Props) {
   const [state, setState] = useState<State>({ kind: "idle" });
+  const [regenerationError, setRegenerationError] = useState<string | null>(null);
 
   async function load(regenerate = false) {
+    const previous = state.kind === "done" ? state.fix : null;
+    setRegenerationError(null);
     setState({ kind: "loading" });
     try {
       const fix = await fetchFix(scanId, findingKey, regenerate);
       setState({ kind: "done", fix });
     } catch (err) {
+      if (previous) {
+        setState({ kind: "done", fix: previous });
+        setRegenerationError(err instanceof Error ? err.message : "Regeneration is unavailable. Showing the saved suggestion.");
+        return;
+      }
       setState({
         kind: "error",
         message: err instanceof Error ? err.message : "Failed to load fix suggestion.",
@@ -85,6 +93,7 @@ export function FixSuggestionPanel({ scanId, findingKey }: Props) {
 
   return (
     <div className="glass mt-4 space-y-5 px-5 py-5">
+      {regenerationError && <p role="status" className="text-xs text-critical">{regenerationError} Showing the saved suggestion.</p>}
       <div className="flex items-center justify-between">
         <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-muted">
           AI fix suggestion
