@@ -233,6 +233,10 @@ async function handleStreamError(handlers: ScanStreamHandlers): Promise<void> {
  * caller with a reason to cancel early always has one.
  */
 export function streamScan(url: string, handlers: ScanStreamHandlers): () => void {
+  // A website scan sends requests to someone's site, so the backend refuses it
+  // unless the person said they own the site or may test it. Only the
+  // confirmation checkbox in `ScanLauncher` gets here, but the backend
+  // checks it again — this flag is what the checkbox sends.
   // encodeURIComponent, not raw interpolation — url is user-typed text ending
   // up in a query string; without escaping, a stray "&" or "#" in it would
   // split the URL into extra query params instead of reaching the backend.
@@ -241,7 +245,7 @@ export function streamScan(url: string, handlers: ScanStreamHandlers): () => voi
   // credentials: "include" — without it the session cookie never reaches
   // this cross-port request either, and the stream 401s before the first event.
   const source = new EventSource(
-    `${API_BASE}/scan/stream?url=${encodeURIComponent(url)}`,
+    `${API_BASE}/scan/stream?url=${encodeURIComponent(url)}&permission_confirmed=true`,
     { withCredentials: true },
   );
 

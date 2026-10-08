@@ -84,7 +84,7 @@ from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
 from storage.installations import list_installations, revoke_installation, save_installation  # noqa: E402
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
-from storage.remediation import list_audit, list_audit_for_user, list_fix_applications  # noqa: E402
+from storage.remediation import list_audit, list_audit_for_user, list_fix_applications, write_audit  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
 from storage.scans import delete_scan, get_scan, list_scans, scan_owner, update_checklist_item  # noqa: E402
 from storage.users import delete_session, sign_in  # noqa: E402
@@ -504,14 +504,38 @@ def scan_unlink_repo(scan_id: str, user: User = Depends(current_user)) -> Respon
     return Response(status_code=204)
 
 
+class UrlScanRequest(ScanRequest):
+    """`POST /scan`'s body: the address, plus the person saying they may test it."""
+
+    permission_confirmed: bool = False
+
+
+def require_permission(confirmed: bool, user: User, url: str) -> None:
+    """A website scan sends requests to someone's site, so the caller has to say
+    they own it or may test it, and that statement is recorded.
+
+    This records an assertion, not proof of ownership: it makes the person say
+    it, and leaves a row saying they did. Proving ownership (a DNS record or a
+    file on the site) is a later step. The row is written before the scan
+    starts, so it exists even when the scan is then refused.
+    """
+    if not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that you own this website or have written permission to security-test it.",
+        )
+    write_audit(user.id, None, None, "scan_permission_confirmed", url)
+
+
 @app.post("/scan", response_model=ScanReport)
-async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against `request.url` and return the report.
 
     `async def` here (unlike `/health`'s plain `def`) because this endpoint
     genuinely awaits something — `run_scan` awaits real HTTP requests inside
     the agents it calls.
     """
+    require_permission(request.permission_confirmed, user, request.url)
     enforce_scan_rate_limit(user.id)
     try:
         return await run_scan(request.url, user_id=user.id)
@@ -550,7 +574,10 @@ def _sse(event: str, data: str) -> str:
 
 @app.get("/scan/stream")
 async def scan_stream(
-    url: str, request: Request, user: User = Depends(current_user)
+    url: str,
+    request: Request,
+    permission_confirmed: bool = False,
+    user: User = Depends(current_user),
 ) -> StreamingResponse:
     """Same scan as `POST /scan`, reported as it happens instead of all at
     once. Server-Sent Events, not JSON — a one-way, GET-only, plain-text
@@ -577,6 +604,7 @@ async def scan_stream(
     never uses up any of the user's scans.
     """
     reject_cross_site_scan_start(request)
+    require_permission(permission_confirmed, user, url)
     enforce_scan_rate_limit(user.id)
 
     async def events():

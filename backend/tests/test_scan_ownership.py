@@ -176,7 +176,9 @@ def test_a_scan_started_from_sentinels_itself_goes_ahead(client, stream_spy, pat
     client.cookies.set("sentinels_session", cookie)
     headers = {"Sec-Fetch-Site": site} if site else {}
 
-    res = client.get(path, params={"url": target}, headers=headers)
+    res = client.get(
+        path, params={"url": target, "permission_confirmed": "true"}, headers=headers
+    )
 
     assert res.status_code == 200
     assert stream_spy == {"scans": 1, "rate_limit": 1}
