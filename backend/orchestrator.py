@@ -26,6 +26,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -37,6 +38,9 @@ from ai.analyst import summarize
 from checklist.evaluator import compute_readiness, evaluate
 from models import AgentResult, ScanReport
 from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
+from net.client import make_scan_client
+from net.policy import BlockedTarget, check_target
+from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
 from storage.scans import save_scan
 
 # Matches ANY "word://" prefix (http, https, ftp, javascript, ...) — not just
@@ -76,6 +80,22 @@ def normalize_url(raw: str) -> str:
         parsed.query,
         "",       # fragments never leave the browser, so they're dropped here
     ))
+
+
+async def _check_allowed(url: str) -> None:
+    """Refuse, before anything is sent, a target the outbound policy forbids.
+
+    `localhost`, private and internal addresses, ports other than 80/443 and
+    URLs carrying credentials all stop here with one clear message — the
+    same rejected-URL path `normalize_url` uses, so the frontend shows it
+    as-is. The scan client checks again at connect time (DNS may answer
+    differently by then); this check exists so the user gets a reason
+    instead of eight agents that each quietly couldn't connect.
+    """
+    try:
+        await check_target(url)
+    except BlockedTarget as exc:
+        raise ValueError(f"Not allowed: {exc.reason}") from None
 
 
 async def _check_reachable(url: str, client: httpx.AsyncClient) -> None:
@@ -162,13 +182,21 @@ async def run_scan(raw_url: str, user_id: int | None = None) -> ScanReport:
     """
     url = normalize_url(raw_url)
     start = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + SCAN_DEADLINE_SECONDS
+    by_agent: dict[str, AgentResult] = {}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await _check_reachable(url, client)
-        context = ScanContext(url=url, client=client)
-        agent_results = await asyncio.gather(
-            *(agent_cls().run(context) for agent_cls in AGENTS)
-        )
+    await _check_allowed(url)
+    with scan_slots.hold(user_id):
+        async with make_scan_client(timeout=10.0) as client:
+            await _check_reachable(url, client)
+            context = ScanContext(url=url, client=client)
+            runs = [(agent_cls.name, agent_cls().run(context)) for agent_cls in AGENTS]
+            async with aclosing(run_with_deadline(runs, deadline)) as results:
+                async for result in results:
+                    by_agent[result.agent] = result
+
+    # Back into `AGENTS`' declared order, whatever order they finished in.
+    agent_results = [by_agent[agent_cls.name] for agent_cls in AGENTS]
 
     return await _finalize(
         url, start, list(agent_results), context.shared.get("subdomains"), user_id
@@ -185,31 +213,41 @@ async def run_scan_stream(
     twice, since it depends on real network timing — followed by exactly
     one `("done", ScanReport)` once all five are in.
 
-    `asyncio.as_completed` is what makes this different from `run_scan`'s
-    `asyncio.gather`: `gather` hands back one list only once every coroutine
-    is done, while `as_completed` hands back each coroutine's result as
-    *that one* finishes, still running every coroutine concurrently the
-    whole time. Nothing about how the agents run changes — only when this
-    function finds out about each one.
+    `run_with_deadline` hands back each agent's result as *that one*
+    finishes, still running every agent concurrently the whole time.
+    `run_scan` uses it too and simply collects the results before returning,
+    so nothing about how the agents run differs — only when the caller
+    finds out about each one. An agent still running at the scan's deadline
+    is cancelled and yielded as a failed `AgentResult`.
 
-    Can raise `ValueError` (from `normalize_url`, or from `_check_reachable`
-    if the host can't be reached at all) before yielding anything at all —
+    Can raise `ValueError` (from `normalize_url`, from `_check_allowed` if the
+    target isn't one a scan may connect to, or from `_check_reachable` if the
+    host can't be reached at all) before yielding anything at all —
     the caller (`main.py`) is responsible for turning that into an in-stream
     event, since by the time this generator has produced its first item the
     HTTP response has already committed to status 200.
     """
     url = normalize_url(raw_url)
     start = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + SCAN_DEADLINE_SECONDS
     agent_results: list[AgentResult] = []
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await _check_reachable(url, client)
-        context = ScanContext(url=url, client=client)
-        coros = [agent_cls().run(context) for agent_cls in AGENTS]
-        for coro in asyncio.as_completed(coros):
-            result = await coro
-            agent_results.append(result)
-            yield ("agent", result)
+    await _check_allowed(url)
+    # If the caller stops iterating (the browser closed the stream), these
+    # blocks unwind from the `yield`: `aclosing` closes `run_with_deadline`,
+    # which cancels and awaits every agent still running; then the client
+    # closes its sockets; then the slot is released. `aclosing` is needed
+    # because leaving an `async for` early does not close the generator it
+    # was reading — that would otherwise wait for the garbage collector.
+    with scan_slots.hold(user_id):
+        async with make_scan_client(timeout=10.0) as client:
+            await _check_reachable(url, client)
+            context = ScanContext(url=url, client=client)
+            runs = [(agent_cls.name, agent_cls().run(context)) for agent_cls in AGENTS]
+            async with aclosing(run_with_deadline(runs, deadline)) as results:
+                async for result in results:
+                    agent_results.append(result)
+                    yield ("agent", result)
 
     report = await _finalize(
         url, start, agent_results, context.shared.get("subdomains"), user_id
