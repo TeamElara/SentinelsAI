@@ -44,6 +44,7 @@ from agents.probe import Budget, safe_get
 from agents.takeover_signatures import match_provider
 from agents.tls import fetch_certificate
 from models import EvidenceKind, Finding, Severity, Status, SubdomainEntry
+from net.policy import BlockedTarget, resolve_and_check
 
 OWASP_MISCONFIG = "A05:2021 - Security Misconfiguration"
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
@@ -102,6 +103,22 @@ def _resolve(hostname: str) -> tuple[str, str] | None:
     return None
 
 
+async def _is_scannable(hostname: str) -> bool:
+    """True if the outbound policy lets a scan connect to `hostname`.
+
+    A discovered subdomain is a hostname the scanned domain's own DNS chose,
+    and nothing stops `intranet.example.com` from pointing at 10.0.0.5 or
+    127.0.0.1. The scan client and the TLS handshake both refuse such a host
+    by themselves at connect time; asking up front is what lets the report
+    say "skipped" rather than "no HTTPS, no HTTP, TLS unknown".
+    """
+    try:
+        await resolve_and_check(hostname)
+    except BlockedTarget:
+        return False
+    return True
+
+
 def _target_resolves(hostname: str) -> bool:
     """True if `hostname` resolves to anything at all — used to tell a
     healthy CNAME target from a dangling (NXDOMAIN) one."""
@@ -155,11 +172,18 @@ class SubdomainAgent(BaseAgent):
 
         responses: dict[str, httpx.Response] = {}
         https_failed: set[str] = set()
+        skipped: list[str] = []
         for entry in entries[:MAX_FOLLOWUP]:
+            # Before any HTTP request or TLS handshake to this host.
+            if not await _is_scannable(entry.host):
+                skipped.append(entry.host)
+                continue
             await self._follow_up(context, entry, http_budget, responses, https_failed)
 
         findings: list[Finding] = []
         for entry in entries[:MAX_FOLLOWUP]:
+            if entry.host in skipped:
+                continue
             response = responses.get(entry.host)
             entry_findings = self._findings_for_entry(entry, response, entry.host in https_failed)
             findings.extend(entry_findings)
@@ -181,6 +205,8 @@ class SubdomainAgent(BaseAgent):
 
         if not entries:
             findings.append(self._clean_finding())
+        if skipped:
+            findings.append(self._skipped_finding(skipped))
         if dns_budget.partial or http_budget.partial:
             findings.append(self._partial_finding())
 
@@ -423,6 +449,22 @@ class SubdomainAgent(BaseAgent):
             owasp=OWASP_MISCONFIG,
             evidence=evidence_text,
             evidence_items=[self.evidence(EvidenceKind.DNS_RECORD, "Subdomain discovery", evidence_text)],
+        )
+
+    def _skipped_finding(self, hosts: list[str]) -> Finding:
+        evidence_text = (
+            f"{len(hosts)} discovered host(s) resolve to a private, local or reserved "
+            f"address and were not contacted: {', '.join(sorted(hosts))}."
+        )
+        return Finding(
+            id="subdomain-internal-skipped",
+            title="Internal-only subdomains were skipped",
+            category="Subdomain",
+            severity=Severity.INFO,
+            status=Status.PASS,
+            owasp=OWASP_MISCONFIG,
+            evidence=evidence_text,
+            evidence_items=[self.evidence(EvidenceKind.DNS_RECORD, "Hosts not contacted", evidence_text)],
         )
 
     def _partial_finding(self) -> Finding:

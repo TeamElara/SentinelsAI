@@ -29,6 +29,8 @@ from agents.base import ScanContext
 from agents.registry import agent_for as url_agent_for
 from agents.repo.base import RepoContext, list_repo_files
 from agents.repo_registry import repo_agent_for
+from net.client import make_scan_client
+from net.policy import BlockedTarget, check_target
 from models import (
     AgentResult,
     Finding,
@@ -231,7 +233,15 @@ async def _rerun_url_agent(report: ScanReport, agent_cls) -> tuple[AgentResult, 
     caller stores it the same way `_rerun_agent` stores a commit ref, so
     `VerificationResult.ref` always means "what was actually observed."
     """
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    # The URL was user-supplied when it was first scanned, and what it
+    # resolves to can have changed since — so it gets the same outbound
+    # policy as a fresh scan, not a pass because it was allowed once.
+    try:
+        await check_target(report.url)
+    except BlockedTarget as exc:
+        raise VerifyError(f"Not allowed: {exc.reason}", status=400) from None
+
+    async with make_scan_client(timeout=15.0, follow_redirects=True) as client:
         context = ScanContext(url=report.url, client=client)
         result = await agent_cls().run(context)
 

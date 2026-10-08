@@ -34,6 +34,8 @@ IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 # Given a hostname, return every address it resolves to (A and AAAA), as
 # strings. Injectable so tests never touch real DNS.
 Resolver = Callable[[str], Awaitable[list[str]]]
+# The same for code that is already on a worker thread (the raw TLS handshake).
+SyncResolver = Callable[[str], list[str]]
 
 # IPv6 ranges whose addresses are a wrapper around an IPv4 address in the
 # low 32 bits. `is_global` judges the wrapper, not what's inside, so
@@ -185,13 +187,20 @@ async def system_resolver(host: str) -> list[str]:
     return list(dict.fromkeys(info[4][0] for info in infos))
 
 
-async def resolve_and_check(host: str, *, resolver: Resolver = system_resolver) -> list[str]:
-    """Resolve `host` and return its addresses, all of them vetted.
+def system_resolver_sync(host: str) -> list[str]:
+    """Blocking twin of `system_resolver`, for code already on a worker thread."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return []
+    return list(dict.fromkeys(info[4][0] for info in infos))
 
-    The host is rejected if *any* answer is not public — not just the first,
-    and not "at least one is fine". A name that answers with both a public
-    and a private address is exactly what a DNS-rebinding setup looks like,
-    and which answer a connect would pick is up to the OS, not us.
+
+def _vet_without_dns(host: str) -> tuple[str, list[str] | None]:
+    """The part of the host check that needs no lookup.
+
+    Returns `(normalized_host, addresses)`; `addresses` is None when the
+    host is a name that still has to be resolved.
     """
     host = normalize_host(host)
     if not host:
@@ -199,20 +208,47 @@ async def resolve_and_check(host: str, *, resolver: Resolver = system_resolver) 
 
     literal = parse_ip_literal(host)
     if literal is not None:
-        return [str(check_ip(literal))]
+        return host, [str(check_ip(literal))]
 
     # Refused by name so the answer doesn't depend on how this machine's
     # resolver happens to treat them.
     if host == "localhost" or host.endswith(".localhost"):
         raise BlockedTarget(_NOT_PUBLIC)
+    return host, None
 
-    addresses = await resolver(host)
+
+def _vet_answers(addresses: list[str]) -> list[str]:
     if not addresses:
         raise BlockedTarget("That host could not be resolved.")
     return [str(check_ip(address)) for address in addresses]
 
 
-async def check_target(url: str, *, resolver: Resolver = system_resolver) -> tuple[str, str, int, list[str]]:
+async def resolve_and_check(host: str, *, resolver: Resolver | None = None) -> list[str]:
+    """Resolve `host` and return its addresses, all of them vetted.
+
+    The host is rejected if *any* answer is not public — not just the first,
+    and not "at least one is fine". A name that answers with both a public
+    and a private address is exactly what a DNS-rebinding setup looks like,
+    and which answer a connect would pick is up to the OS, not us.
+
+    `resolver` defaults to `system_resolver`, looked up when called so a
+    test can replace it in one place.
+    """
+    host, addresses = _vet_without_dns(host)
+    if addresses is not None:
+        return addresses
+    return _vet_answers(await (resolver or system_resolver)(host))
+
+
+def resolve_and_check_sync(host: str, *, resolver: SyncResolver | None = None) -> list[str]:
+    """Blocking `resolve_and_check`, same rules."""
+    host, addresses = _vet_without_dns(host)
+    if addresses is not None:
+        return addresses
+    return _vet_answers((resolver or system_resolver_sync)(host))
+
+
+async def check_target(url: str, *, resolver: Resolver | None = None) -> tuple[str, str, int, list[str]]:
     """Full check for one URL: shape, then every address the host resolves to.
 
     Returns `(scheme, host, port, vetted_addresses)`.

@@ -35,7 +35,6 @@ from net.policy import (
     check_url,
     parse_ip_literal,
     resolve_and_check,
-    system_resolver,
 )
 
 
@@ -74,7 +73,7 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
     def __init__(
         self,
         *,
-        resolver: Resolver = system_resolver,
+        resolver: Resolver | None = None,
         inner: httpcore.AsyncNetworkBackend | None = None,
     ) -> None:
         self._resolver = resolver
@@ -152,7 +151,7 @@ class PolicyTransport(httpx.AsyncBaseTransport):
 def make_scan_transport(
     *,
     verify: bool | ssl.SSLContext = True,
-    resolver: Resolver = system_resolver,
+    resolver: Resolver | None = None,
     backend_inner: httpcore.AsyncNetworkBackend | None = None,
 ) -> PolicyTransport:
     """An httpx transport whose connections all go through the outbound policy."""
@@ -174,7 +173,7 @@ def make_scan_transport(
 def make_scan_client(
     *,
     verify: bool | ssl.SSLContext = True,
-    resolver: Resolver = system_resolver,
+    resolver: Resolver | None = None,
     backend_inner: httpcore.AsyncNetworkBackend | None = None,
     **client_kwargs: Any,
 ) -> httpx.AsyncClient:

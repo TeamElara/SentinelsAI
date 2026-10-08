@@ -36,6 +36,8 @@ from agents.registry import AGENTS
 from ai.analyst import summarize
 from checklist.evaluator import compute_readiness, evaluate
 from models import AgentResult, ScanReport
+from net.client import make_scan_client
+from net.policy import BlockedTarget, check_target
 from scoring import calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
@@ -76,6 +78,22 @@ def normalize_url(raw: str) -> str:
         parsed.query,
         "",       # fragments never leave the browser, so they're dropped here
     ))
+
+
+async def _check_allowed(url: str) -> None:
+    """Refuse, before anything is sent, a target the outbound policy forbids.
+
+    `localhost`, private and internal addresses, ports other than 80/443 and
+    URLs carrying credentials all stop here with one clear message — the
+    same rejected-URL path `normalize_url` uses, so the frontend shows it
+    as-is. The scan client checks again at connect time (DNS may answer
+    differently by then); this check exists so the user gets a reason
+    instead of eight agents that each quietly couldn't connect.
+    """
+    try:
+        await check_target(url)
+    except BlockedTarget as exc:
+        raise ValueError(f"Not allowed: {exc.reason}") from None
 
 
 async def _check_reachable(url: str, client: httpx.AsyncClient) -> None:
@@ -158,7 +176,8 @@ async def run_scan(raw_url: str, user_id: int | None = None) -> ScanReport:
     url = normalize_url(raw_url)
     start = time.perf_counter()
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    await _check_allowed(url)
+    async with make_scan_client(timeout=10.0) as client:
         await _check_reachable(url, client)
         context = ScanContext(url=url, client=client)
         agent_results = await asyncio.gather(
@@ -187,8 +206,9 @@ async def run_scan_stream(
     whole time. Nothing about how the agents run changes — only when this
     function finds out about each one.
 
-    Can raise `ValueError` (from `normalize_url`, or from `_check_reachable`
-    if the host can't be reached at all) before yielding anything at all —
+    Can raise `ValueError` (from `normalize_url`, from `_check_allowed` if the
+    target isn't one a scan may connect to, or from `_check_reachable` if the
+    host can't be reached at all) before yielding anything at all —
     the caller (`main.py`) is responsible for turning that into an in-stream
     event, since by the time this generator has produced its first item the
     HTTP response has already committed to status 200.
@@ -197,7 +217,8 @@ async def run_scan_stream(
     start = time.perf_counter()
     agent_results: list[AgentResult] = []
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    await _check_allowed(url)
+    async with make_scan_client(timeout=10.0) as client:
         await _check_reachable(url, client)
         context = ScanContext(url=url, client=client)
         coros = [agent_cls().run(context) for agent_cls in AGENTS]
