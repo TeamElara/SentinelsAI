@@ -12,3 +12,6 @@ playwright==1.61.0
 PyJWT==2.15.1
 cryptography==50.0.1
 libsql==0.1.11
+# Error tracking (Launch Plan 7.1). Only active when SENTRY_DSN is set, and then
+# only through observability.scrub_event, which sends no data from scans.
+sentry-sdk[fastapi]==2.71.0
