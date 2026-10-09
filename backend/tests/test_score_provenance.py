@@ -27,13 +27,13 @@ def test_new_score_version_round_trips(temp_db):
 
 
 def test_migration_15_can_land_after_16_to_18(tmp_path, monkeypatch):
-    """Track A's migration 15 (users.blocked) was reserved while Track C's 16-18
-    were built, so a database may already be at 18 without it. The ledger must
+    """Track A's migration 15 (users.blocked) was reserved while Track C's 16-19
+    were built, so a database may already be at 19 without it. The ledger must
     still apply it, once."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "late.db")      # a fresh file, not temp_db's
     everything = list(db.MIGRATIONS)
     monkeypatch.setattr(db, "MIGRATIONS", [m for m in everything if m[0] != 15])
-    db.init_db()                                  # a database at 18 that never saw 15
+    db.init_db()                                  # a database at 19 that never saw 15
     conn = db.get_connection()
     assert "blocked" not in [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=15").fetchone() is None
@@ -45,7 +45,7 @@ def test_migration_15_can_land_after_16_to_18(tmp_path, monkeypatch):
     conn = db.get_connection()
     assert conn.execute("SELECT blocked FROM users").fetchall() == []
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=15").fetchone() is not None
-    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 18
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == everything[-1][0]
     conn.close()
 
 
@@ -57,5 +57,5 @@ def test_failed_migration_rolls_back_schema_and_ledger(temp_db, monkeypatch):
     conn = db.get_connection()
     assert "rolled_back" not in [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=99").fetchone() is None
-    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 18
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 19
     conn.close()

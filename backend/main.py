@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 # Loads backend/.env into the process's environment (GROQ_API_KEY, if
 # present) once, at startup — so ai/analyst.py's os.environ.get() call later,
@@ -80,6 +80,7 @@ from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, Checklist
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
+from remediation.linking import is_valid_name, is_valid_ref  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
 from remediation.planning import NotARepoScan, build_bundle_zip, plan_and_save, preview_plan  # noqa: E402
 from remediation.registry import fixable_findings  # noqa: E402
@@ -563,6 +564,20 @@ class LinkRepoRequest(BaseModel):
     installation_id: int
     repo: str
     ref: Optional[str] = None
+
+    @field_validator("repo")
+    @classmethod
+    def _repo_is_a_name(cls, value: str) -> str:
+        if not is_valid_name(value):
+            raise ValueError("repo must be a repository name: letters, digits, '.', '-' and '_' only.")
+        return value
+
+    @field_validator("ref")
+    @classmethod
+    def _ref_is_plain(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not is_valid_ref(value):
+            raise ValueError("ref must be a plain branch, tag or commit name.")
+        return value
 
 
 @app.post("/scans/{scan_id}/link-repo", response_model=ScanRepoLink)

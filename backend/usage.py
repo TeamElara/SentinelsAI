@@ -77,6 +77,39 @@ def _recover_stale(conn, now):
         _refund(conn, row["id"])
 
 
+def _seed_from_carryover(conn, user_id, day):
+    """Restore today's counts a previous account with this GitHub id left behind.
+
+    Deleting an account cascades its `usage` rows away; `carry_over_for_deletion`
+    parked today's counts under the GitHub id first, so a person who deletes
+    and signs in again starts the day where they left off. Existing rows win.
+    """
+    conn.execute(
+        "INSERT INTO usage(user_id,day,kind,count) "
+        "SELECT ?, c.day, c.kind, c.count FROM usage_carryover c "
+        "JOIN users u ON u.github_id = c.github_id WHERE u.id = ? AND c.day = ? "
+        "ON CONFLICT DO NOTHING",
+        (user_id, user_id, day),
+    )
+
+
+def carry_over_for_deletion(conn, user_id):
+    """Park today's counts for a user about to be deleted. Caller commits.
+
+    Keeps the larger count if the same GitHub id deletes more than once in a
+    day, and drops carried rows from earlier days.
+    """
+    day = _now().date().isoformat()
+    conn.execute("DELETE FROM usage_carryover WHERE day < ?", (day,))
+    conn.execute(
+        "INSERT INTO usage_carryover(github_id,day,kind,count) "
+        "SELECT u.github_id, g.day, g.kind, g.count FROM usage g "
+        "JOIN users u ON u.id = g.user_id WHERE g.user_id = ? AND g.day = ? AND g.count > 0 "
+        "ON CONFLICT(github_id,day,kind) DO UPDATE SET count = MAX(count, excluded.count)",
+        (user_id, day),
+    )
+
+
 def reserve(user_id, kind, *, request_key=None, target=None):
     limit = _limit(kind)
     now = _now()
@@ -94,6 +127,7 @@ def reserve(user_id, kind, *, request_key=None, target=None):
                     raise HTTPException(status_code=409, detail="This scan request ID belongs to a different target.")
             conn.commit()
             return Reservation(existing["id"], False)
+        _seed_from_carryover(conn, user_id, day)
         conn.execute("INSERT INTO usage(user_id,day,kind,count) VALUES (?,?,?,0) ON CONFLICT DO NOTHING", (user_id, day, kind))
         changed = conn.execute("UPDATE usage SET count=count+1 WHERE user_id=? AND day=? AND kind=? AND count < ?", (user_id, day, kind, limit)).rowcount
         if changed != 1:
@@ -137,6 +171,7 @@ def usage_for(user_id):
         now = _now()
         conn.execute("BEGIN IMMEDIATE")
         _recover_stale(conn, now)
+        _seed_from_carryover(conn, user_id, now.date().isoformat())
         counts = {r["kind"]: r["count"] for r in conn.execute("SELECT kind,count FROM usage WHERE user_id=? AND day=?", (user_id, now.date().isoformat())).fetchall()}
         conn.commit()
         return {"day": now.date().isoformat(), "resets_at": (now + timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0).isoformat(),
