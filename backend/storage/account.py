@@ -19,6 +19,12 @@ tested:
   and `scan_id` is cleared by its own foreign key when the scan goes. The
   `detail` text (a URL, a repository, a PR number) is left as written.
 
+**Kept, keyed by GitHub id, until the end of the UTC day**
+* today's usage counts (`usage_carryover`). Without them, deleting an account
+  and signing in again would hand out a fresh daily allowance. Only counts are
+  kept, no scan or address, and rows from earlier days are pruned on the next
+  deletion.
+
 **Not in this database's reach**
 * the App itself, which stays installed on GitHub until the user removes it
   there (the account page says so);
@@ -31,6 +37,7 @@ are untouched.
 from __future__ import annotations
 
 from db import get_connection
+from usage import carry_over_for_deletion
 
 
 def delete_account(user_id: int) -> dict[str, int]:
@@ -52,6 +59,7 @@ def delete_account(user_id: int) -> dict[str, int]:
                 "SELECT COUNT(*) AS n FROM audit_log WHERE user_id = ?", (user_id,)
             ).fetchone()["n"],
         }
+        carry_over_for_deletion(conn, user_id)
         conn.execute("UPDATE audit_log SET user_id = NULL WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM scans WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))

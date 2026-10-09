@@ -8,6 +8,7 @@ Run locally:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -16,7 +17,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 from urllib.parse import urlparse
 
 import secrets
@@ -27,7 +28,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # Loads backend/.env into the process's environment (GROQ_API_KEY, if
 # present) once, at startup — so ai/analyst.py's os.environ.get() call later,
@@ -78,8 +79,10 @@ from auth.session import (  # noqa: E402
 from db import init_db  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
+from usage import has_reservation  # noqa: E402
 from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
+from remediation.linking import is_valid_name, is_valid_ref  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
 from remediation.planning import NotARepoScan, build_bundle_zip, plan_and_save, preview_plan  # noqa: E402
 from remediation.registry import fixable_findings  # noqa: E402
@@ -503,6 +506,8 @@ async def github_webhook(request: Request) -> dict:
     revoked = revoke_installation_everywhere(installation_id)
     logger.info("github webhook: installation %s %s, %s grant(s) revoked", installation_id, action, revoked)
     return {"ok": True, "revoked": revoked}
+
+
 class DeleteAccountRequest(BaseModel):
     confirm_login: str
 
@@ -563,6 +568,20 @@ class LinkRepoRequest(BaseModel):
     installation_id: int
     repo: str
     ref: Optional[str] = None
+
+    @field_validator("repo")
+    @classmethod
+    def _repo_is_a_name(cls, value: str) -> str:
+        if not is_valid_name(value):
+            raise ValueError("repo must be a repository name: letters, digits, '.', '-' and '_' only.")
+        return value
+
+    @field_validator("ref")
+    @classmethod
+    def _ref_is_plain(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not is_valid_ref(value):
+            raise ValueError("ref must be a plain branch, tag or commit name.")
+        return value
 
 
 @app.post("/scans/{scan_id}/link-repo", response_model=ScanRepoLink)
@@ -625,21 +644,24 @@ class UrlScanRequest(ScanRequest):
     permission_confirmed: bool = False
 
 
-def require_permission(confirmed: bool, user: User, url: str) -> None:
+def require_permission(confirmed: bool, user: User, url: str, *, record: bool = True) -> None:
     """A website scan sends requests to someone's site, so the caller has to say
     they own it or may test it, and that statement is recorded.
 
     This records an assertion, not proof of ownership: it makes the person say
     it, and leaves a row saying they did. Proving ownership (a DNS record or a
     file on the site) is a later step. The row is written before the scan
-    starts, so it exists even when the scan is then refused.
+    starts, so it exists even when the scan is then refused. `record=False`
+    checks the statement without logging it again, for a stream reconnecting
+    to a scan whose start was already logged.
     """
     if not confirmed:
         raise HTTPException(
             status_code=400,
             detail="Confirm that you own this website or have written permission to security-test it.",
         )
-    write_audit(user.id, None, None, "scan_permission_confirmed", url)
+    if record:
+        write_audit(user.id, None, None, "scan_permission_confirmed", url)
 
 
 @app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
@@ -741,7 +763,8 @@ async def scan_stream(
     the job produces a failed event and refunds its reservation.
     """
     reject_cross_site_scan_start(request)
-    require_permission(permission_confirmed, user, url)
+    reconnect = await asyncio.to_thread(has_reservation, user.id, 'url_scan', request_id)
+    require_permission(permission_confirmed, user, url, record=not reconnect)
 
     async def events():
         async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
@@ -974,8 +997,13 @@ async def finding_fix_plan(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+# Each key is a round of GitHub reads on the installation's shared rate limit.
+MAX_FINDING_KEYS = 100
+FindingKeys = Annotated[list[Annotated[str, Field(max_length=200)]], Field(max_length=MAX_FINDING_KEYS)]
+
+
 class FixPlanRequest(BaseModel):
-    finding_keys: list[str]
+    finding_keys: FindingKeys
 
 
 class FixPlanResult(BaseModel):
@@ -1029,7 +1057,7 @@ def scan_fix_bundle(scan_id: str, user: User = Depends(current_user)) -> Respons
 
 
 class FixApplyRequest(BaseModel):
-    finding_keys: list[str]
+    finding_keys: FindingKeys
     # Defaults to a dry run on purpose. A request that forgets the flag
     # previews; it never pushes. The dangerous option has to be typed.
     dry_run: bool = True
@@ -1182,6 +1210,7 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
     )
 
 
-# Register the concrete route so A2's route inventory covers it on FastAPI
-# versions that retain included routers lazily instead of flattening app.routes.
+# `/usage` is registered directly rather than through `budgeted_operations`'s
+# router so it is plainly part of `app.routes`, which A2's route inventory test
+# walks.
 app.add_api_route('/usage', get_usage, methods=['GET'])
