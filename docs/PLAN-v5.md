@@ -1228,6 +1228,39 @@ request hasn't merged yet — the state this section describes until 2026-08-13.
 
 ---
 
+## Launch hardening — what landed on `main` (2026-10-09)
+
+The three-track launch plan (`Sentinels-Launch-Plan-Final.pdf`: A1–A8, B1–B7,
+C1–C11) is merged on `main` through [PR #31](https://github.com/TeamElara/SentinelsAI/pull/31)
+(integration of all three tracks), [PR #32](https://github.com/TeamElara/SentinelsAI/pull/32)
+(B/C handoff, C7 quotas on the protected routes) and
+[PR #33](https://github.com/TeamElara/SentinelsAI/pull/33) (review fixes). The backend
+suite on `main` is 1006 tests, all passing.
+
+| Gate | Plan tasks | State on `main` |
+| --- | --- | --- |
+| 1. Account isolation & GitHub authorization | A1–A4 | Done in code: owner-checked scan loader, route-walking access test, installation proof + repo write check, stored-scan PDF only, cross-site stream refusal. |
+| 2. Safe connections & honest results | B1–B3, C1–C4 | Done in code: outbound policy, pinned client, every scan connection routed through it; order-independent score; coverage states and provisional grades; scorer version. |
+| 3. Durable storage & resource limits | B4, B5, C6–C8, C10 | Done in code: deadlines and cleanup, tarball streaming, libSQL driver + backup/restore tooling, durable quotas, AI-failure regressions, prompt split. **Remote Turso acceptance and a Render redeploy are not yet run.** |
+| 4. Validated optional features | A8, B6 | Webhook and PDF sandbox are in code. PDF stays off on Render until Chromium's memory is measured. Only `repo-config` has a recorded apply→merge→verify cycle (Stage J); other fixers stay preview-only until each has one. |
+| 5. Restricted beta | A5, A6, C5, C9, C11 | Switches, onboarding confirmation, cold-start screen and security headers are in code. Live checks are open (below). |
+| 6. Widen access | A7 | Delete-my-account is in code. Domain verification is not built; it must exist before open sign-ups. |
+
+### What only a person with the dashboards can close
+
+- GitHub App: turn on "Request user authorization during installation", set the
+  webhook URL and secret.
+- Render: set `SENTINELS_ALLOWED_GITHUB_IDS` and `SENTINELS_ENABLED_FIXERS`;
+  flip `SENTINELS_SCANS_PAUSED` / `SENTINELS_WRITES_PAUSED` once each and write
+  the measured time into `DEPLOY.md` (currently "not measured yet").
+- Turso: remote acceptance, latency, a restore, and a redeploy that keeps data.
+- Vercel: confirm whose account deploys (Hobby is personal use); the preview is
+  behind SSO, so `evidence/c11-live.json` is still pending.
+- Sentry (with redaction of URLs, findings, tokens, repo contents) and
+  UptimeRobot are not set up; no Sentry code exists in the repo yet.
+- A smoke test through the real proxy path (sign-in, install callback, SSE,
+  cold start) and a tried rollback.
+
 ## Definition of done
 
 1. User scans a repo → 2. a fixable finding appears → 3. user clicks Fix → 4. deterministic
