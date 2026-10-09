@@ -28,6 +28,7 @@ for the full explanation of each one. The short version:
 | `GITHUB_APP_PRIVATE_KEY_PATH` | Only for autofix | See below — this is the one setting that needs a Render-specific trick. |
 | `GROQ_API_KEY` | No | Scans work fully without it; only the AI summary sentence is skipped. |
 | `SENTINELS_PDF_ENABLED` | No | Leave unset (off) on Render: PDF export needs Chromium, which this build doesn't install and whose memory use on a 512 MB instance hasn't been measured. See `docs/NETWORK-EGRESS.md`. |
+| `SENTRY_DSN` | No | Turns on error reporting to Sentry. Leave unset and nothing is sent. Events are scrubbed in `backend/observability.py` before they leave the process: URLs, hostnames, IPs, emails and tokens are replaced; query strings, headers, cookies, bodies, breadcrumbs and local variables are dropped. Optional `SENTRY_ENVIRONMENT` (default `production`) and `SENTRY_RELEASE`. Create the Sentry project yourself and turn off "Store IP addresses" in its Security & Privacy settings as a second layer. |
 
 ### The GitHub App private key on Render
 
