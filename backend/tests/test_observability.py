@@ -27,6 +27,9 @@ SECRETS = [
     "3f2c1b9e-8d4a-4f6b-9a1c-0e5d7c2b1a90",             # a scan id
     "AKIAIOSFODNN7EXAMPLE-masked-secret",
     "octocat/secret-repo",
+    "scanned-target.example",                            # a bare hostname, no scheme
+    "2001:db8:85a3::8a2e:370:7334",                      # an IPv6 address
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-key-body",         # inside a PEM block
 ]
 
 
@@ -61,7 +64,7 @@ def rich_event() -> dict:
             }]},
         }]},
         "logentry": {"message": "scan of %s failed for %s", "formatted": leak, "params": [SECRETS[0], SECRETS[8]]},
-        "message": leak,
+        "message": leak + f" (also {SECRETS[13]} at {SECRETS[14]}, -----BEGIN PRIVATE KEY-----\n{SECRETS[15]}\n-----END PRIVATE KEY-----)",
         "transaction": f"/scans/{SECRETS[10]}/export/pdf",
         "breadcrumbs": {"values": [{"message": SECRETS[0], "data": {"url": SECRETS[0]}}]},
         "extra": {"installation_token": SECRETS[2], "repo": SECRETS[12]},
@@ -110,6 +113,28 @@ def test_fields_the_scrubber_has_never_heard_of_are_dropped():
 def test_addresses_in_free_text_are_replaced(text):
     assert "victim-site" not in scrub_text(text)
     assert "<url>" in scrub_text(text)
+
+
+@pytest.mark.parametrize("text,gone", [
+    ("could not resolve victim-site.example", "victim-site.example"),
+    ("TLS handshake with api.victim-site.example failed", "victim-site.example"),
+    ("connect to 2001:db8:85a3::8a2e:370:7334 refused", "2001:db8"),
+    ("key -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY----- bad", "MIIEvQIBADANBgkq"),
+    ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
+    ("auth failed: token ghs_notarealtokenbutlongenough", "ghs_notareal"),
+])
+def test_things_that_identify_a_target_or_a_secret_are_replaced(text, gone):
+    assert gone not in scrub_text(text)
+
+
+@pytest.mark.parametrize("text", [
+    "File main.py line 10 in scan",
+    "could not read package.json",
+    "failed at 12:30:45 on try 3",
+    "ValueError in orchestrator.py",
+])
+def test_ordinary_text_stays_readable(text):
+    assert scrub_text(text) == text
 
 
 def test_long_messages_are_cut():
@@ -225,3 +250,17 @@ def test_an_unhandled_error_in_a_request_reports_the_route_but_no_request_data(s
         assert leaked(report) == []
     request = next(r for r in sdk.sent if "request" in r)["request"]
     assert request == {"method": "GET", "url": "/boom/<id>"}
+
+
+def test_a_broken_dsn_does_not_stop_the_api_from_starting(monkeypatch, caplog):
+    import sentry_sdk
+
+    def explode(**kwargs):
+        raise ValueError("Unsupported scheme")
+
+    monkeypatch.setenv("SENTRY_DSN", "not-a-dsn")
+    monkeypatch.setattr(sentry_sdk, "init", explode)
+
+    with caplog.at_level(logging.ERROR):
+        assert init_error_tracking() is False
+    assert "could not start" in caplog.text

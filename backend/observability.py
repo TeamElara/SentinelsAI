@@ -17,6 +17,7 @@ nothing.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # What a free-text field (an exception message, a log line) may not contain.
 _URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s'\"<>)\]}]+")
+_PEM = re.compile(r"-----BEGIN [A-Z ]+-----.*?-----END [A-Z ]+-----", re.DOTALL)
 _SECRET = re.compile(
     r"(?:gh[pousr]_[A-Za-z0-9]{16,}"                 # GitHub tokens
     r"|github_pat_[A-Za-z0-9_]{16,}"
@@ -34,22 +36,48 @@ _SECRET = re.compile(
     r"|sk-[A-Za-z0-9_\-]{16,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
     r"|eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*"   # JWTs
-    r"|(?i:bearer)\s+[A-Za-z0-9._\-~+/=]{8,})"
+    r"|(?i:bearer|basic|token)\s+[A-Za-z0-9._\-~+/=]{8,})"
 )
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+\.[\w.\-]+")
 _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+# Candidates are confirmed with the ipaddress module, so a clock time such as
+# 12:30:45 isn't mistaken for an address.
+_IPV6_CANDIDATE = re.compile(r"(?<![\w:])[0-9a-fA-F:.]*:[0-9a-fA-F:.]*:[0-9a-fA-F:.]*(?![\w:])")
+# A bare hostname such as "victim-site.example": an error like "could not
+# resolve victim-site.example" carries the scanned site without any scheme.
+# Names that are really files (main.py, package.json) are left readable.
+_FILE_SUFFIXES = {
+    "py", "pyc", "json", "toml", "txt", "md", "yml", "yaml", "db", "pem", "js", "mjs",
+    "ts", "tsx", "jsx", "css", "html", "lock", "cfg", "ini", "conf", "log", "sql", "env",
+}
+_HOST = re.compile(r"\b(?:[A-Za-z0-9-]+\.)+([A-Za-z]{2,})\b")
 _MAX_TEXT = 300
+
+
+def _ipv6(match: re.Match) -> str:
+    try:
+        ipaddress.IPv6Address(match.group(0))
+    except ValueError:
+        return match.group(0)
+    return "<ip>"
+
+
+def _host(match: re.Match) -> str:
+    return match.group(0) if match.group(1).lower() in _FILE_SUFFIXES else "<host>"
 
 
 def scrub_text(value: Any) -> str:
     """A string with addresses, secrets, ids and e-mail addresses replaced."""
     text = str(value)
+    text = _PEM.sub("<secret>", text)
     text = _SECRET.sub("<secret>", text)
     text = _URL.sub("<url>", text)
     text = _EMAIL.sub("<email>", text)
     text = _UUID.sub("<id>", text)
     text = _IPV4.sub("<ip>", text)
+    text = _IPV6_CANDIDATE.sub(_ipv6, text)
+    text = _HOST.sub(_host, text)
     return text[:_MAX_TEXT]
 
 
@@ -111,23 +139,31 @@ def scrub_event(event: dict, hint: dict | None = None) -> dict | None:
 
 
 def init_error_tracking() -> bool:
-    """Start reporting if `SENTRY_DSN` is set. Returns whether it started."""
+    """Start reporting if `SENTRY_DSN` is set. Returns whether it started.
+
+    A broken Sentry setup (a mistyped DSN, an SDK problem) must never stop the
+    API from starting, so any failure here is logged and swallowed.
+    """
     dsn = os.environ.get("SENTRY_DSN", "").strip()
     if not dsn:
         return False
-    import sentry_sdk
+    try:
+        import sentry_sdk
 
-    sentry_sdk.init(
-        dsn=dsn,
-        environment=os.environ.get("SENTRY_ENVIRONMENT") or "production",
-        release=os.environ.get("RENDER_GIT_COMMIT") or None,
-        send_default_pii=False,
-        include_local_variables=False,      # frame variables hold request data
-        max_request_body_size="never",
-        max_breadcrumbs=0,                  # breadcrumbs record log lines and HTTP calls
-        traces_sample_rate=0.0,
-        server_name="",
-        before_send=scrub_event,
-    )
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=os.environ.get("SENTRY_ENVIRONMENT") or "production",
+            release=os.environ.get("RENDER_GIT_COMMIT") or None,
+            send_default_pii=False,
+            include_local_variables=False,      # frame variables hold request data
+            max_request_body_size="never",
+            max_breadcrumbs=0,                  # breadcrumbs record log lines and HTTP calls
+            traces_sample_rate=0.0,
+            server_name="",
+            before_send=scrub_event,
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.exception("error tracking could not start; continuing without it")
+        return False
     logger.info("error tracking enabled")
     return True
