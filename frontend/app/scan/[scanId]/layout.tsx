@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { FloatingChatButton } from "@/components/chat/FloatingChatButton";
+import { UsageBadge } from "@/components/UsageBadge";
 import { fetchScan } from "@/lib/api";
 import type { TargetType } from "@/lib/api";
 
@@ -108,6 +109,7 @@ export default function ScanLayout({ children }: { children: React.ReactNode }) 
         </div>
       </nav>
 
+      <div className="mx-auto w-full max-w-3xl px-6"><UsageBadge /></div>
       {children}
 
       {!isChatPage && <FloatingChatButton scanId={scanId} />}

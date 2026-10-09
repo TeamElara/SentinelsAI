@@ -132,3 +132,26 @@ async def test_stream_also_isolates_the_broken_agent(monkeypatch, temp_db):
     assert len(broken) == 1
     assert broken[0].error is not None
     assert done_events[0].agents == agent_events
+
+
+async def test_stream_and_non_stream_score_identically_for_aliases(monkeypatch, temp_db):
+    class HeaderFixture(BaseAgent):
+        name = "headers"
+
+        async def scan(self, context):
+            return [Finding(id="missing-hsts", title="HSTS", category="Headers",
+                            severity=Severity.HIGH, status=Status.FAIL)]
+
+    class ApiFixture(BaseAgent):
+        name = "api-security"
+
+        async def scan(self, context):
+            return [Finding(id=issue, title=issue, category="API",
+                            severity=Severity.HIGH, status=Status.FAIL)
+                    for issue in ("api-missing-hsts", "api-cors", "api-docs")]
+
+    _patch_client(monkeypatch, _ok_handler)
+    monkeypatch.setattr(orchestrator, "AGENTS", [ApiFixture, HeaderFixture])
+    report = await run_scan("https://example.com")
+    streamed = [payload async for kind, payload in run_scan_stream("https://example.com") if kind == "done"]
+    assert report.score == streamed[0].score == 65

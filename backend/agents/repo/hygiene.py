@@ -11,6 +11,7 @@ second file -- these are all "does this repo have X" checks of the same
 shape, just more of them.
 """
 from __future__ import annotations
+from scan_coverage import record
 
 from agents.repo.base import BaseRepoAgent, RepoContext, RepoFile
 from models import Finding, Severity, Status
@@ -249,6 +250,7 @@ class HygieneAgent(BaseRepoAgent):
             if repo_file.size <= _LARGE_FILE_THRESHOLD_BYTES:
                 continue
             if len(findings) >= _MAX_LARGE_FILE_FINDINGS:
+                record("Large file findings limit", "partial", "Additional large-file findings were truncated.")
                 break
             file_slug = repo_file.path.replace("/", "-")
             size_mb = repo_file.size / 1_000_000

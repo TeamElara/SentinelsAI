@@ -81,7 +81,7 @@ export function ScanProgress({
                 </p>
               ) : (
                 <p className="mt-2 font-mono text-[10px] text-muted">
-                  {result.findings.length} checks · {result.duration_ms}ms
+                  {result.findings.length} findings · {result.coverage_status ?? "unavailable"} · {result.duration_ms}ms
                 </p>
               )
             ) : (

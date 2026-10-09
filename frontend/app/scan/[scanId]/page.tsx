@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   downloadReportPdf,
+  fetchExportFormats,
   fetchFixSummary,
   fetchScan,
   type Finding,
@@ -25,6 +26,7 @@ import { useScrollDrift } from "@/lib/useScrollDrift";
 import { ScoreRing } from "@/components/ScoreRing";
 import { AgentCarousel } from "@/components/AgentCarousel";
 import { Footer } from "@/components/Footer";
+import { CoveragePanel } from "@/components/CoveragePanel";
 
 /* The single worst problem in the report, as a plain-English headline.
    `groupByCategory` already sorts worst category first and worst finding
@@ -69,14 +71,14 @@ function DeploymentBadge({
       ? "text-critical"
       : status === "caution"
         ? "text-[#facc15]"
-        : "text-[#4ade80]";
+        : status === "ready" ? "text-[#4ade80]" : "text-muted";
 
   const label =
     status === "blocked"
       ? "Blocked"
       : status === "caution"
         ? "Caution"
-        : "Ready";
+        : status === "ready" ? "Ready" : "Incomplete";
 
   return (
     <Link
@@ -150,7 +152,16 @@ export default function ScanPage() {
   const [notFound, setNotFound] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [pdfEnabled, setPdfEnabled] = useState(false);
   const headerDriftRef = useScrollDrift<HTMLElement>(0.03, 32);
+
+  useEffect(() => {
+    let active = true;
+    fetchExportFormats().then((formats) => {
+      if (active) setPdfEnabled(formats.includes("pdf"));
+    }).catch(() => { if (active) setPdfEnabled(false); });
+    return () => { active = false; };
+  }, [scanId]);
 
   useEffect(() => {
     fetchScan(scanId)
@@ -179,8 +190,8 @@ export default function ScanPage() {
     setExportError(null);
     try {
       await downloadReportPdf(report);
-    } catch {
-      setExportError("Couldn't generate the PDF. Try again.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Couldn't generate the PDF. Try again.");
     } finally {
       setIsExporting(false);
     }
@@ -249,14 +260,14 @@ export default function ScanPage() {
               >
                 New scan
               </Link>
-              <button
+              {pdfEnabled && <button
                 type="button"
                 onClick={handleDownload}
                 disabled={isExporting}
                 className="glass px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] transition-colors hover:bg-white/8 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-white/4"
               >
                 {isExporting ? "Preparing…" : "Download PDF"}
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -265,7 +276,9 @@ export default function ScanPage() {
           </p>
           <p className="mt-3 font-mono text-sm text-muted">
             {report.scanned_at} · {report.duration_ms}ms
+            {" · Scorer: "}{report.scorer_version ?? "legacy-v1"}
           </p>
+          {(report.provisional ?? true) && <p className="mt-3 text-sm text-muted">Provisional score and grade: some required checks are incomplete or their coverage was not recorded.</p>}
 
           {exportError && (
             <p className="mt-2 font-mono text-sm text-critical">{exportError}</p>
@@ -332,6 +345,7 @@ export default function ScanPage() {
         </section>
       )}
 
+      <CoveragePanel agents={report.agents} />
     </article>
 
     {/* Outside the article: AgentReel's panels used to bleed to the

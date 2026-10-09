@@ -57,7 +57,8 @@ class MarkdownExporter:
         lines = [
             f"# Sentinels report — {report.url}",
             "",
-            f"**Score:** {report.score}/100 (grade {report.grade})  ",
+            f"**Score:** {report.score}/100 (grade {report.grade}{' — provisional' if report.provisional else ''})  ",
+            f"**Scorer:** {report.scorer_version}",
             f"**Scanned:** {report.scanned_at} · {report.duration_ms}ms",
         ]
         if report.deployment_status and report.readiness_score is not None:
@@ -65,6 +66,13 @@ class MarkdownExporter:
                 f"**Deployment:** {report.deployment_status} (readiness {report.readiness_score}/100)"
             )
 
+        lines += ["", "## Check coverage"]
+        if report.provisional:
+            lines += ["", "Incomplete or unrecorded coverage. Score and grade are provisional; deployment readiness is unknown."]
+        for agent in report.agents:
+            lines.append(f"- **{agent.agent}: {agent.coverage_status}**")
+            for check in agent.coverage:
+                lines.append(f"  - {check.check}: **{check.status}** — {check.reason}")
         if report.summary:
             lines += ["", "## Assessment", "", report.summary]
 
@@ -73,7 +81,7 @@ class MarkdownExporter:
 
         lines += ["", "## Findings"]
         if problem_count == 0:
-            lines += ["", "Every check passed. Nothing to report."]
+            lines += ["", "No issues observed within completed checks. See coverage for limitations."]
         else:
             for category, problems, passed in groups:
                 lines += ["", f"## {category}"]

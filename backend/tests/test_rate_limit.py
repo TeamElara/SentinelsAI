@@ -44,3 +44,15 @@ def test_enforce_scan_rate_limit_raises_429_once_exhausted():
     with pytest.raises(HTTPException) as exc_info:
         enforce_scan_rate_limit(user_id)
     assert exc_info.value.status_code == 429
+
+
+def test_refund_is_idempotent_and_only_removes_its_own_ticket():
+    limiter = SlidingWindowLimiter(limit=2, window_seconds=60)
+    first, second = limiter.reserve(1), limiter.reserve(1)
+    assert first is not None and second is not None
+    limiter.refund(1, first)
+    limiter.refund(1, first)
+    assert limiter.allow(1)
+    assert not limiter.allow(1)  # The second start was never refunded.
+    limiter.refund(2, second)
+    assert not limiter.allow(1)  # A different account can't refund this ticket.

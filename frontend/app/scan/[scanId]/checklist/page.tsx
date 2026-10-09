@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { fetchChecklist, type ChecklistItem } from "@/lib/api";
+import { fetchScan, type ChecklistItem, type ScanReport } from "@/lib/api";
 import { ChecklistTable } from "@/components/checklist/ChecklistTable";
 
 function ReadinessBadge({ score, status }: { score: number; status: string | null }) {
@@ -19,14 +19,14 @@ function ReadinessBadge({ score, status }: { score: number; status: string | nul
       ? "text-critical"
       : status === "caution"
         ? "text-[#facc15]"
-        : "text-[#4ade80]";
+        : status === "ready" ? "text-[#4ade80]" : "text-muted";
 
   const label =
     status === "blocked"
       ? "Blocked"
       : status === "caution"
         ? "Caution"
-        : "Ready";
+        : status === "ready" ? "Ready" : "Incomplete";
 
   return (
     <div className="glass flex items-center gap-8 px-7 py-6 sm:gap-10 sm:px-9 sm:py-8">
@@ -56,11 +56,12 @@ function ReadinessBadge({ score, status }: { score: number; status: string | nul
 export default function ChecklistPage() {
   const { scanId } = useParams<{ scanId: string }>();
   const [items, setItems] = useState<ChecklistItem[] | null>(null);
+  const [report, setReport] = useState<ScanReport | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchChecklist(scanId)
-      .then(setItems)
+    fetchScan(scanId)
+      .then((scan) => { setReport(scan); setItems(scan?.checklist ?? null); })
       .finally(() => setLoading(false));
   }, [scanId]);
 
@@ -95,26 +96,10 @@ export default function ChecklistPage() {
     );
   }
 
-  // Compute readiness from auto items only (same logic as backend evaluator)
-  const autoItems = items.filter((it) => it.tier === "auto");
-  const passingAuto = autoItems.filter((it) => it.state === "pass").length;
-  const readinessScore =
-    autoItems.length > 0 ? Math.round((passingAuto / autoItems.length) * 100) : 100;
-
-  const hasBlockingFail = items.some(
-    (it) =>
-      it.tier === "auto" &&
-      it.state === "fail" &&
-      ["https_enforced", "cert_valid", "no_env_exposure", "no_git_exposure"].includes(
-        it.item_key,
-      ),
-  );
-  const hasCaution = items.some(
-    (it) =>
-      it.tier !== "self_attested" && (it.state === "fail" || it.state === "warn"),
-  );
-
-  const status = hasBlockingFail ? "blocked" : hasCaution ? "caution" : "ready";
+  // Use the backend's rules for both URL and repo scans, including coverage.
+  const readinessScore = report?.readiness_score ?? 0;
+  const status = (report?.provisional ?? true) && report?.deployment_status !== "blocked"
+    ? "incomplete" : report?.deployment_status ?? "incomplete";
 
   return (
     <article className="mx-auto w-full max-w-7xl px-6 py-20 sm:px-8">

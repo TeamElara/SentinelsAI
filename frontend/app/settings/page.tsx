@@ -19,6 +19,7 @@ import {
   githubInstallUrl,
   logout,
   revokeInstallation,
+  deleteAccount,
   type GitHubInstallation,
 } from "@/lib/api";
 import { useSession } from "@/lib/useSession";
@@ -29,6 +30,16 @@ const INSTALL_ERRORS: Record<string, string> = {
   not_signed_in: "Your session ended before the install finished. Sign in and try again.",
   installation_lookup_failed:
     "GitHub wouldn't tell us which account that installation covers, so it wasn't saved.",
+  authorization_required:
+    "GitHub didn't confirm who you are during the install, so it wasn't saved. Try connecting again.",
+  authorization_failed:
+    "GitHub rejected the sign-in step of the install, so it wasn't saved. Try connecting again.",
+  identity_mismatch:
+    "The GitHub account that finished the install isn't the one you're signed in with, so it wasn't saved.",
+  installation_not_yours:
+    "That installation isn't one your GitHub account has access to, so it wasn't saved.",
+  installation_taken:
+    "Another Sentinels user already has that installation connected, so it wasn't saved.",
 };
 
 const SELECTION_LABEL: Record<string, string> = {
@@ -69,6 +80,11 @@ export default function SettingsPage() {
   const [installations, setInstallations] = useState<GitHubInstallation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [typedLogin, setTypedLogin] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
 
   // Called from event handlers (after a disconnect), never from the effect
   // below — see the comment there.
@@ -129,8 +145,41 @@ export default function SettingsPage() {
     router.replace("/login");
   }
 
+  async function removeAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(typedLogin);
+      setDeleted(true);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete the account.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const live = (installations ?? []).filter((i) => i.revoked_at === null);
   const revoked = (installations ?? []).filter((i) => i.revoked_at !== null);
+
+  if (deleted) {
+    return (
+      <main className="mx-auto w-full max-w-3xl px-6 py-20 sm:px-8">
+        <h1 className="font-display text-5xl sm:text-6xl">Account deleted</h1>
+        <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
+          Your scans, reports, chat history and connected-repository records are gone from
+          Sentinels. Pull requests Sentinels already opened stay on GitHub, and the Sentinels
+          App stays installed there until you remove it: open your GitHub settings, then
+          Applications, then Installed GitHub Apps, and uninstall Sentinels from each account.
+        </p>
+        <Link
+          href="/"
+          className="glass mt-10 inline-block px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] text-parchment transition-colors hover:bg-white/10"
+        >
+          Back to the start
+        </Link>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-20 sm:px-8">
@@ -248,6 +297,77 @@ export default function SettingsPage() {
           uninstall the App on GitHub — do that from your GitHub settings if you want the
           grant gone on their side too.
         </p>
+      </section>
+
+      <section className="mt-20 border-t border-rule pt-10">
+        <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
+          Delete account
+        </h2>
+        <p className="mt-5 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
+          This deletes your scans and reports, findings, chat history, planned fixes, and
+          your connected-repository records. It can&apos;t be undone. A short record that a
+          scan or a pull request happened is kept without your name on it. Pull requests
+          already opened stay on GitHub, and you remove the Sentinels App from your GitHub
+          settings yourself.
+        </p>
+
+        {!confirmingDelete ? (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="mt-8 font-mono text-[10px] uppercase tracking-[0.2em] text-muted underline decoration-rule transition-colors hover:text-critical"
+          >
+            Delete my account…
+          </button>
+        ) : (
+          <div className="mt-8 max-w-md">
+            <label
+              htmlFor="confirm-login"
+              className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted"
+            >
+              Type your GitHub login ({user?.github_login}) to confirm
+            </label>
+            <input
+              id="confirm-login"
+              type="text"
+              value={typedLogin}
+              onChange={(event) => setTypedLogin(event.target.value)}
+              autoComplete="off"
+              disabled={deleting}
+              className="mt-3 w-full border-b border-rule bg-transparent pb-2 font-mono text-base outline-none focus:border-parchment disabled:text-muted"
+            />
+            {deleteError && (
+              <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.2em] text-critical">
+                {deleteError}
+              </p>
+            )}
+            <div className="mt-6 flex gap-6">
+              <button
+                type="button"
+                onClick={removeAccount}
+                disabled={
+                  deleting ||
+                  typedLogin.trim().toLowerCase() !== (user?.github_login ?? "").toLowerCase()
+                }
+                className="font-mono text-[10px] uppercase tracking-[0.2em] text-critical transition-opacity disabled:opacity-40"
+              >
+                {deleting ? "Deleting…" : "Delete everything"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setTypedLogin("");
+                  setDeleteError(null);
+                }}
+                disabled={deleting}
+                className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-parchment"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </main>
   );

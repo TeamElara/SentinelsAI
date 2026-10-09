@@ -38,12 +38,14 @@ from urllib.parse import urlsplit
 
 import dns.resolver
 import httpx
+from scan_coverage import record
 
 from agents.base import BaseAgent, ScanContext
 from agents.probe import Budget, safe_get
 from agents.takeover_signatures import match_provider
 from agents.tls import fetch_certificate
 from models import EvidenceKind, Finding, Severity, Status, SubdomainEntry
+from net.policy import DNS_LIFETIME_SECONDS, DNS_TIMEOUT_SECONDS, BlockedTarget, resolve_and_check
 
 OWASP_MISCONFIG = "A05:2021 - Security Misconfiguration"
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
@@ -77,6 +79,10 @@ _DNS_RESOLVERS = ["8.8.8.8", "1.1.1.1"]
 def _make_resolver() -> dns.resolver.Resolver:
     resolver = dns.resolver.Resolver(configure=False)
     resolver.nameservers = _DNS_RESOLVERS
+    # These lookups run on a worker thread, which can't be cancelled — the
+    # limit on the lookup itself is the only thing that ends a slow one.
+    resolver.timeout = DNS_TIMEOUT_SECONDS
+    resolver.lifetime = DNS_LIFETIME_SECONDS
     return resolver
 
 
@@ -87,19 +93,43 @@ def _resolve(hostname: str) -> tuple[str, str] | None:
     try:
         answer = resolver.resolve(hostname, "CNAME")
         return ("CNAME", str(answer[0].target).rstrip("."))
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS CNAME {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     try:
         answer = resolver.resolve(hostname, "A")
         return ("A", answer[0].address)
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS A {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     try:
         answer = resolver.resolve(hostname, "AAAA")
         return ("AAAA", answer[0].address)
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        if isinstance(exc, (dns.resolver.NoNameservers, dns.exception.Timeout)):
+            record(f"DNS AAAA {hostname}", "unavailable", "DNS service unavailable or timed out.")
         pass
     return None
+
+
+async def _is_scannable(hostname: str) -> bool:
+    """True if the outbound policy lets a scan connect to `hostname`.
+
+    A discovered subdomain is a hostname the scanned domain's own DNS chose,
+    and nothing stops `intranet.example.com` from pointing at 10.0.0.5 or
+    127.0.0.1. The scan client and the TLS handshake both refuse such a host
+    by themselves at connect time; asking up front is what lets the report
+    say "skipped" rather than "no HTTPS, no HTTP, TLS unknown".
+    """
+    try:
+        await resolve_and_check(hostname)
+    except BlockedTarget as exc:
+        status = "unavailable" if exc.reason == "That host could not be resolved." else "skipped"
+        record(f"Subdomain follow-up {hostname}", status, exc.reason)
+        return False
+    return True
 
 
 def _target_resolves(hostname: str) -> bool:
@@ -118,6 +148,11 @@ async def _query_ct_logs(client: httpx.AsyncClient, domain: str) -> list[str]:
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError):
+        record("Certificate Transparency discovery", "unavailable", "CT service failed or returned invalid JSON.")
+        return []
+
+    if not isinstance(data, list):
+        record("Certificate Transparency discovery", "unavailable", "CT response was not a list.")
         return []
 
     names: set[str] = set()
@@ -151,15 +186,26 @@ class SubdomainAgent(BaseAgent):
 
         entries = await self._discover(context, apex, dns_budget)
         entries.sort(key=lambda e: self._sort_key(e, apex))
+        if len(entries) > MAX_DISCOVERED:
+            record("Subdomain inventory limit", "partial", "Discovered inventory exceeded the host limit.")
         entries = entries[:MAX_DISCOVERED]
+        if len(entries) > MAX_FOLLOWUP:
+            record("Subdomain follow-up limit", "partial", "Some discovered hosts were not followed up.")
 
         responses: dict[str, httpx.Response] = {}
         https_failed: set[str] = set()
+        skipped: list[str] = []
         for entry in entries[:MAX_FOLLOWUP]:
+            # Before any HTTP request or TLS handshake to this host.
+            if not await _is_scannable(entry.host):
+                skipped.append(entry.host)
+                continue
             await self._follow_up(context, entry, http_budget, responses, https_failed)
 
         findings: list[Finding] = []
         for entry in entries[:MAX_FOLLOWUP]:
+            if entry.host in skipped:
+                continue
             response = responses.get(entry.host)
             entry_findings = self._findings_for_entry(entry, response, entry.host in https_failed)
             findings.extend(entry_findings)
@@ -224,6 +270,7 @@ class SubdomainAgent(BaseAgent):
         try:
             cert, _ = await asyncio.to_thread(fetch_certificate, apex, 443, CT_TIMEOUT)
         except Exception:  # noqa: BLE001 - discovery-only, a dead handshake just means "no SANs"
+            record("Certificate SAN discovery", "unavailable", "Could not read certificate SANs.")
             return []
         names: set[str] = set()
         for kind, value in cert.get("subjectAltName", ()):
@@ -271,6 +318,7 @@ class SubdomainAgent(BaseAgent):
             entry.tls_valid = False
         except Exception:  # noqa: BLE001 - connection refused/timeout/DNS: "couldn't determine", not "invalid"
             entry.tls_valid = None
+            record(f"TLS {entry.host}", "unavailable", "TLS handshake could not be completed.")
 
     # --- Per-subdomain findings ------------------------------------------------
 

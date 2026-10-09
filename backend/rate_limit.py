@@ -58,32 +58,44 @@ class SlidingWindowLimiter:
     def __init__(self, limit: int, window_seconds: float) -> None:
         self._limit = limit
         self._window = window_seconds
-        self._calls: dict[int, list[float]] = defaultdict(list)
+        self._calls: dict[int, list[tuple[object, float]]] = defaultdict(list)
         self._lock = Lock()
 
     def allow(self, key: int) -> bool:
+        return self.reserve(key) is not None
+
+    def reserve(self, key: int) -> object | None:
+        """Return a unique refundable ticket for this particular scan start."""
         now = monotonic()
         with self._lock:
-            recent = [t for t in self._calls[key] if now - t < self._window]
+            recent = [(ticket, t) for ticket, t in self._calls[key] if now - t < self._window]
             if len(recent) >= self._limit:
                 self._calls[key] = recent
-                return False
-            recent.append(now)
+                return None
+            ticket = object()
+            recent.append((ticket, now))
             self._calls[key] = recent
-            return True
+            return ticket
+
+    def refund(self, key: int, ticket: object | None) -> None:
+        if ticket is None:
+            return
+        with self._lock:
+            self._calls[key] = [(item, t) for item, t in self._calls[key] if item is not ticket]
 
 
 _scan_limiter = SlidingWindowLimiter(SCAN_LIMIT, WINDOW_SECONDS)
 
 
-def enforce_scan_rate_limit(user_id: int) -> None:
+def enforce_scan_rate_limit(user_id: int) -> object:
     """Raise 429 if `user_id` has started too many scans too recently.
 
     A plain function, not a FastAPI dependency, so it can be called after
     `current_user` has already resolved the user — no need to re-parse the
     session cookie just to get an id to key on.
     """
-    if not _scan_limiter.allow(user_id):
+    ticket = _scan_limiter.reserve(user_id)
+    if ticket is None:
         logger.warning("rate limit hit: user_id=%s exceeded %s scans/%ss", user_id, SCAN_LIMIT, int(WINDOW_SECONDS))
         raise HTTPException(
             status_code=429,
@@ -92,3 +104,9 @@ def enforce_scan_rate_limit(user_id: int) -> None:
                 f"{int(WINDOW_SECONDS // 60)} minutes. Wait a moment and try again."
             ),
         )
+    return ticket
+
+
+def refund_scan_rate_limit(user_id: int, ticket: object | None) -> None:
+    """Refund only the failed attempt; never remove another concurrent start."""
+    _scan_limiter.refund(user_id, ticket)

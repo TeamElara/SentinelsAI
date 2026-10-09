@@ -58,6 +58,10 @@ def _happy_routes(gitignore_exists: bool = False) -> dict:
     and every write succeeds."""
     routes = {
         ("GET", BASE): (200, {"default_branch": "main"}),
+        # The App-side check that the signed-in user may push to this repo.
+        ("GET", f"{BASE}/collaborators/octo/permission"): (
+            200, {"role_name": "write", "permission": "write"}
+        ),
         ("GET", f"{BASE}/commits/main"): (200, {"sha": "basesha"}),
         ("GET", f"{BASE}/git/commits/basesha"): (200, {"tree": {"sha": "basetree"}}),
         ("POST", f"{BASE}/git/blobs"): (201, {"sha": "blobsha"}),

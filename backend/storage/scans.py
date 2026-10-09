@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 
 from db import get_connection
@@ -88,19 +89,18 @@ def scan_owner(scan_id: str) -> int | None:
 def list_scans(limit: int = 20, offset: int = 0, user_id: int | None = None) -> list[ScanSummary]:
     """Return scan summaries, newest first.
 
-    `user_id` scopes the list to one person's scans plus every unowned one.
-    Unowned scans (`user_id IS NULL`) are the ones taken before Stage 0 added
-    identity — hiding them would make a working install look empty after an
-    upgrade, so they stay visible to everyone rather than being orphaned.
+    `user_id` scopes the list to that person's own scans. Unowned scans
+    (`user_id IS NULL`, taken before Stage 0 added identity) belong to nobody,
+    so they are left out rather than shown to every account.
     """
     conn = get_connection()
     try:
-        where = "" if user_id is None else "WHERE user_id = ? OR user_id IS NULL"
+        where = "" if user_id is None else "WHERE user_id = ?"
         params: tuple = (limit, offset) if user_id is None else (user_id, limit, offset)
         rows = conn.execute(
             f"""
             SELECT id, url, target_type, score, grade, scanned_at, duration_ms, summary,
-                   readiness_score, deployment_status
+                   readiness_score, deployment_status, scorer_version
             FROM scans
             {where}
             ORDER BY created_at DESC
@@ -115,6 +115,7 @@ def list_scans(limit: int = 20, offset: int = 0, user_id: int | None = None) -> 
                 target_type=row["target_type"],
                 score=row["score"],
                 grade=row["grade"],
+                scorer_version=row["scorer_version"],
                 scanned_at=row["scanned_at"],
                 duration_ms=row["duration_ms"],
                 summary=row["summary"] or "",
@@ -175,6 +176,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
                 findings=findings_by_agent.get(ar["agent"], []),
                 duration_ms=ar["duration_ms"],
                 error=ar["error"],
+                coverage=json.loads(ar["coverage_json"]),
             )
             for ar in agent_rows
         ]
@@ -188,6 +190,8 @@ def get_scan(scan_id: str) -> ScanReport | None:
         counts = count_by_severity(all_findings)
 
         checklist = load_checklist(conn, scan_id)
+        from checklist.evaluator import apply_coverage
+        apply_coverage(checklist, agents)
         subdomains = load_subdomains(conn, scan_id)
 
         return ScanReport(
@@ -198,6 +202,7 @@ def get_scan(scan_id: str) -> ScanReport | None:
             duration_ms=scan_row["duration_ms"],
             score=scan_row["score"],
             grade=scan_row["grade"],
+            scorer_version=scan_row["scorer_version"],
             summary=scan_row["summary"] or "",
             counts=counts,
             findings=all_findings,
@@ -243,9 +248,9 @@ def save_scan(
             """
             INSERT INTO scans (
                 id, url, target_type, scanned_at, duration_ms, score, grade,
-                summary, readiness_score, deployment_status, created_at, user_id
+                summary, readiness_score, deployment_status, created_at, user_id, scorer_version
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.id,
@@ -260,6 +265,7 @@ def save_scan(
                 report.deployment_status,
                 datetime.now(timezone.utc).isoformat(),
                 user_id,
+                report.scorer_version,
             ),
         )
         save_agent_results(conn, report.id, report.agents)

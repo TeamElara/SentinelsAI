@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import re
+from scan_coverage import record
 from collections import Counter
 
 from agents.repo.base import BaseRepoAgent, RepoContext, RepoFile
@@ -91,6 +92,7 @@ class SecretsAgent(BaseRepoAgent):
         findings: list[Finding] = []
         for repo_file in context.files:
             if len(findings) >= _MAX_FINDINGS:
+                record("Secrets findings budget", "partial", "Finding limit reached before all files were checked.")
                 break
 
             basename = repo_file.path.rsplit("/", 1)[-1]
@@ -100,6 +102,7 @@ class SecretsAgent(BaseRepoAgent):
             try:
                 text = repo_file.abs_path.read_text(encoding="utf-8", errors="ignore")
             except (UnicodeDecodeError, OSError):
+                record(repo_file.path, "unavailable", "Source file could not be read.")
                 continue
 
             findings.extend(self._provider_matches(repo_file, text))
@@ -108,6 +111,8 @@ class SecretsAgent(BaseRepoAgent):
             if basename not in _LOCKFILE_NAMES:
                 findings.extend(self._generic_entropy_matches(repo_file, text))
 
+        if len(findings) > _MAX_FINDINGS:
+            record("Secrets findings budget", "partial", "Finding limit truncated the output.")
         return findings[:_MAX_FINDINGS]
 
     def _provider_matches(self, repo_file: RepoFile, text: str) -> list[Finding]:

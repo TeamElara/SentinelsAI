@@ -16,6 +16,7 @@ import re
 from urllib.parse import urljoin
 
 import httpx
+from scan_coverage import record
 
 from agents.base import BaseAgent, ScanContext
 from agents.probe import Budget, RobotsGate, safe_get, safe_head, safe_options
@@ -337,6 +338,7 @@ class ApiSecurityAgent(BaseAgent):
                 target, headers={"Origin": _CORS_PROBE_ORIGIN}, follow_redirects=True, timeout=5.0
             )
         except httpx.HTTPError:
+            record(f"CORS {target}", "unavailable", "CORS probe failed.")
             return None
 
         acao = response.headers.get("access-control-allow-origin")

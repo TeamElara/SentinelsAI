@@ -26,14 +26,26 @@ import socket
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit
 
+import dns.asyncresolver
+import dns.exception
+import dns.resolver
+
 ALLOWED_SCHEMES = {"http": 80, "https": 443}
 ALLOWED_PORTS = frozenset(ALLOWED_SCHEMES.values())
+
+# One DNS query may wait this long for a nameserver, and one whole lookup
+# (retries and all) this long in total.
+DNS_TIMEOUT_SECONDS = 2.0
+DNS_LIFETIME_SECONDS = 5.0
+_FALLBACK_NAMESERVERS = ["8.8.8.8", "1.1.1.1"]
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 # Given a hostname, return every address it resolves to (A and AAAA), as
 # strings. Injectable so tests never touch real DNS.
 Resolver = Callable[[str], Awaitable[list[str]]]
+# The same for code that is already on a worker thread (the raw TLS handshake).
+SyncResolver = Callable[[str], list[str]]
 
 # IPv6 ranges whose addresses are a wrapper around an IPv4 address in the
 # low 32 bits. `is_global` judges the wrapper, not what's inside, so
@@ -174,24 +186,67 @@ _NOT_PUBLIC = (
 )
 
 
-async def system_resolver(host: str) -> list[str]:
-    """Resolve `host` to all of its A and AAAA addresses via the OS resolver."""
-    loop = asyncio.get_running_loop()
+def _dns_resolver(cls):
+    """A dnspython resolver with a hard limit on how long one lookup may take."""
     try:
-        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except (socket.gaierror, UnicodeError):
-        return []
-    # Order-preserving dedupe: getaddrinfo can repeat an address per socket type.
-    return list(dict.fromkeys(info[4][0] for info in infos))
+        resolver = cls()
+    except dns.resolver.NoResolverConfiguration:
+        resolver = cls(configure=False)
+        resolver.nameservers = _FALLBACK_NAMESERVERS
+    resolver.timeout = DNS_TIMEOUT_SECONDS
+    resolver.lifetime = DNS_LIFETIME_SECONDS
+    return resolver
 
 
-async def resolve_and_check(host: str, *, resolver: Resolver = system_resolver) -> list[str]:
-    """Resolve `host` and return its addresses, all of them vetted.
+def _addresses(answers) -> list[str]:
+    found: list[str] = []
+    for answer in answers:
+        # A failed lookup for one record type (no AAAA record, a timeout)
+        # is just no addresses of that type.
+        if isinstance(answer, BaseException):
+            continue
+        found.extend(record.address for record in answer)
+    return list(dict.fromkeys(found))
 
-    The host is rejected if *any* answer is not public — not just the first,
-    and not "at least one is fine". A name that answers with both a public
-    and a private address is exactly what a DNS-rebinding setup looks like,
-    and which answer a connect would pick is up to the OS, not us.
+
+async def system_resolver(host: str) -> list[str]:
+    """Resolve `host` to all of its A and AAAA addresses.
+
+    Uses dnspython rather than `getaddrinfo`: `getaddrinfo` has no timeout
+    and runs on a worker thread that can't be cancelled, so one slow
+    nameserver could hold a thread for as long as the OS felt like. Here a
+    lookup ends after `DNS_LIFETIME_SECONDS`, on the event loop, and can be
+    cancelled with the scan. Since connections go to the addresses returned
+    here, it doesn't matter that the OS resolver might have answered
+    differently.
+    """
+    resolver = _dns_resolver(dns.asyncresolver.Resolver)
+    answers = await asyncio.gather(
+        resolver.resolve(host, "A"), resolver.resolve(host, "AAAA"), return_exceptions=True
+    )
+    for answer in answers:
+        if isinstance(answer, asyncio.CancelledError):
+            raise answer
+    return _addresses(answers)
+
+
+def system_resolver_sync(host: str) -> list[str]:
+    """Blocking twin of `system_resolver`, for code already on a worker thread."""
+    resolver = _dns_resolver(dns.resolver.Resolver)
+    answers = []
+    for record_type in ("A", "AAAA"):
+        try:
+            answers.append(resolver.resolve(host, record_type))
+        except dns.exception.DNSException as exc:
+            answers.append(exc)
+    return _addresses(answers)
+
+
+def _vet_without_dns(host: str) -> tuple[str, list[str] | None]:
+    """The part of the host check that needs no lookup.
+
+    Returns `(normalized_host, addresses)`; `addresses` is None when the
+    host is a name that still has to be resolved.
     """
     host = normalize_host(host)
     if not host:
@@ -199,20 +254,47 @@ async def resolve_and_check(host: str, *, resolver: Resolver = system_resolver) 
 
     literal = parse_ip_literal(host)
     if literal is not None:
-        return [str(check_ip(literal))]
+        return host, [str(check_ip(literal))]
 
     # Refused by name so the answer doesn't depend on how this machine's
     # resolver happens to treat them.
     if host == "localhost" or host.endswith(".localhost"):
         raise BlockedTarget(_NOT_PUBLIC)
+    return host, None
 
-    addresses = await resolver(host)
+
+def _vet_answers(addresses: list[str]) -> list[str]:
     if not addresses:
         raise BlockedTarget("That host could not be resolved.")
     return [str(check_ip(address)) for address in addresses]
 
 
-async def check_target(url: str, *, resolver: Resolver = system_resolver) -> tuple[str, str, int, list[str]]:
+async def resolve_and_check(host: str, *, resolver: Resolver | None = None) -> list[str]:
+    """Resolve `host` and return its addresses, all of them vetted.
+
+    The host is rejected if *any* answer is not public — not just the first,
+    and not "at least one is fine". A name that answers with both a public
+    and a private address is exactly what a DNS-rebinding setup looks like,
+    and which answer a connect would pick is up to the OS, not us.
+
+    `resolver` defaults to `system_resolver`, looked up when called so a
+    test can replace it in one place.
+    """
+    host, addresses = _vet_without_dns(host)
+    if addresses is not None:
+        return addresses
+    return _vet_answers(await (resolver or system_resolver)(host))
+
+
+def resolve_and_check_sync(host: str, *, resolver: SyncResolver | None = None) -> list[str]:
+    """Blocking `resolve_and_check`, same rules."""
+    host, addresses = _vet_without_dns(host)
+    if addresses is not None:
+        return addresses
+    return _vet_answers((resolver or system_resolver_sync)(host))
+
+
+async def check_target(url: str, *, resolver: Resolver | None = None) -> tuple[str, str, int, list[str]]:
     """Full check for one URL: shape, then every address the host resolves to.
 
     Returns `(scheme, host, port, vetted_addresses)`.

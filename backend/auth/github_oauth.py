@@ -34,6 +34,7 @@ import httpx
 AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 USER_API_URL = "https://api.github.com/user"
+USER_INSTALLATIONS_URL = "https://api.github.com/user/installations"
 
 # The GitHub App's user-authorization flow needs no scopes to read a public
 # profile, and asking for none is the point: the sign-in consent screen should
@@ -150,8 +151,11 @@ def authorize_url(state: str, redirect_uri: str) -> str:
     return f"{AUTHORIZE_URL}?{params}"
 
 
-async def exchange_code(code: str, redirect_uri: str) -> str | None:
+async def exchange_code(code: str, redirect_uri: str | None = None) -> str | None:
     """Trade the callback's `code` for an access token. None on any failure.
+
+    `redirect_uri` is only sent when given: the code that comes back from
+    installing the App has no sign-in redirect to repeat.
 
     `Accept: application/json` matters — without it GitHub answers this
     endpoint in `application/x-www-form-urlencoded`, and `response.json()`
@@ -159,15 +163,15 @@ async def exchange_code(code: str, redirect_uri: str) -> str | None:
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
+            data = {
+                "client_id": get_client_id() or "",
+                "client_secret": get_client_secret() or "",
+                "code": code,
+            }
+            if redirect_uri:
+                data["redirect_uri"] = redirect_uri
             response = await client.post(
-                ACCESS_TOKEN_URL,
-                headers={"Accept": "application/json"},
-                data={
-                    "client_id": get_client_id() or "",
-                    "client_secret": get_client_secret() or "",
-                    "code": code,
-                    "redirect_uri": redirect_uri,
-                },
+                ACCESS_TOKEN_URL, headers={"Accept": "application/json"}, data=data
             )
         except httpx.HTTPError:
             return None
@@ -216,3 +220,50 @@ async def fetch_identity(access_token: str) -> GitHubIdentity | None:
         login=login,
         avatar_url=avatar if isinstance(avatar, str) else None,
     )
+
+
+# More than 5 pages of 100 installations is not a person Sentinels is built for;
+# the cap keeps a hostile or broken response from looping forever.
+_MAX_INSTALLATION_PAGES = 5
+
+
+async def list_user_installation_ids(access_token: str) -> set[int] | None:
+    """The ids of every installation of this App that the token's user can
+    access, or None if GitHub won't say.
+
+    "Can access" includes installations the user can only *read*, so this
+    proves the person is connected to the installation, not that they may
+    write to any repository in it. Writes are checked separately, per
+    repository, in `remediation/access.py`.
+    """
+    ids: set[int] = set()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for page in range(1, _MAX_INSTALLATION_PAGES + 1):
+            try:
+                response = await client.get(
+                    USER_INSTALLATIONS_URL,
+                    params={"per_page": 100, "page": page},
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "Authorization": f"Bearer {access_token}",
+                    },
+                )
+            except httpx.HTTPError:
+                return None
+            if response.status_code != 200:
+                return None
+            try:
+                payload = response.json()
+            except ValueError:
+                return None
+            batch = payload.get("installations") if isinstance(payload, dict) else None
+            if not isinstance(batch, list):
+                return None
+            ids.update(i["id"] for i in batch if isinstance(i, dict) and isinstance(i.get("id"), int))
+            if len(batch) < 100:
+                break
+    return ids
+def get_webhook_secret() -> str | None:
+    """The secret GitHub signs webhook deliveries with, set on the App's
+    settings page. Without it no delivery can be verified, so none is read."""
+    return os.environ.get("GITHUB_APP_WEBHOOK_SECRET") or None

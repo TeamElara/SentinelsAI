@@ -1,6 +1,7 @@
 # Python
-.venv/
-venv/
+# No trailing slash: a symlinked venv is not a directory, and `.venv/` skips it.
+.venv
+venv
 __pycache__/
 *.py[cod]
 .pytest_cache/

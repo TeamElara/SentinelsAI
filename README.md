@@ -103,7 +103,7 @@ Every fix follows the same rule, no exceptions:
 ## Running it
 
 Written and verified on Windows — the machine this was built on. Needs
-**Python 3.11+** and **Node 18+** already installed.
+**Python 3.13** and **Node 24 LTS** already installed, matching CI and hosting.
 
 ### 1. Backend (FastAPI)
 
@@ -136,7 +136,7 @@ In a second terminal:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 

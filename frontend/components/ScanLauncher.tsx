@@ -15,9 +15,16 @@
    the time `done` arrives, so the new page can fetch it immediately from
    `GET /scans/{id}` — hard-refresh works. */
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { streamScan, streamRepoScan, type AgentResult, type TargetType } from "@/lib/api";
+import {
+  streamScan,
+  streamRepoScan,
+  type AgentResult,
+  type ScanStreamHandlers,
+  type TargetType,
+} from "@/lib/api";
+import { UsageBadge } from "@/components/UsageBadge";
 import { ScanProgress } from "@/components/ScanProgress";
 
 type ScanLauncherProps = {
@@ -49,8 +56,16 @@ export function ScanLauncher({
   targetType = "url",
 }: ScanLauncherProps) {
   const router = useRouter();
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
   const [url, setUrl] = useState("");
+  // A website scan sends requests to someone's site, so the person has to say
+  // they may test it. The backend enforces this and records it; the checkbox
+  // is the only way the frontend gets it to send `permission_confirmed`.
+  const [permission, setPermission] = useState(false);
+  const needsPermission = targetType === "url";
   const [isScanning, setIsScanning] = useState(false);
+  const [isWaking, setIsWaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Filled in one at a time as each "agent" SSE event arrives — this is what
   // makes the waiting state below real instead of a generic pulse.
@@ -61,14 +76,16 @@ export function ScanLauncher({
     // would throw away every piece of state above. This cancels that.
     event.preventDefault();
 
-    if (!url.trim() || isScanning) return;
+    if (!url.trim() || isScanning || (needsPermission && !permission)) return;
 
     setError(null);
     setAgentResults({});
     setIsScanning(true);
+    setIsWaking(false);
 
-    const stream = targetType === "repo" ? streamRepoScan : streamScan;
-    stream(url, {
+    const handlers: ScanStreamHandlers = {
+      onWaking: () => setIsWaking(true),
+      onReady: () => setIsWaking(false),
       onAgent: (result) => {
         setAgentResults((prev) => ({ ...prev, [result.agent]: result }));
       },
@@ -77,20 +94,26 @@ export function ScanLauncher({
         router.push(`/scan/${finishedReport.id}`);
       },
       onError: (message) => {
+        setIsWaking(false);
         setError(message);
         setIsScanning(false);
       },
-    });
+    };
+    // Only a website scan carries the "I may test this site" confirmation.
+    // Passing it explicitly matters: the stream defaults it to false, and the
+    // backend refuses a website scan without it.
+    stop.current =
+      targetType === "repo"
+        ? streamRepoScan(url, handlers)
+        : streamScan(url, handlers, permission);
   }
 
   return (
     <>
       {!isScanning && children}
 
-      <form
-        onSubmit={handleSubmit}
-        className="mt-14 flex flex-col gap-4 sm:flex-row sm:items-end"
-      >
+      <form onSubmit={handleSubmit} className="mt-14 flex flex-col gap-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
         {/* The label and the input share a column so a VISIBLE label can sit
             above the field instead of beside it. With no `label` prop the
             label is `sr-only`, the column collapses to just the input, and
@@ -123,16 +146,36 @@ export function ScanLauncher({
         </div>
         <button
           type="submit"
-          disabled={isScanning || !url.trim()}
+          disabled={isScanning || !url.trim() || (needsPermission && !permission)}
           className="glass shrink-0 px-6 py-3 font-mono text-xs uppercase tracking-[0.2em]
                      transition-colors hover:bg-white/8 disabled:cursor-not-allowed
                      disabled:text-muted disabled:hover:bg-white/4"
         >
           {isScanning ? "Inspecting" : submitLabel}
         </button>
+        </div>
+        {needsPermission && (
+          <label className="flex w-full items-start gap-3 text-sm leading-relaxed text-muted">
+            <input
+              id="permission"
+              name="permission"
+              type="checkbox"
+              checked={permission}
+              onChange={(event) => setPermission(event.target.checked)}
+              disabled={isScanning}
+              className="mt-1 h-4 w-4 shrink-0 accent-current"
+            />
+            <span>
+              I own this website or have written permission to security-test it.
+            </span>
+          </label>
+        )}
       </form>
 
-      {isScanning && <ScanProgress agentResults={agentResults} targetType={targetType} />}
+      <UsageBadge kind={targetType === "repo" ? "repo_scan" : "url_scan"} />
+
+      {isWaking && <p role="status" className="mt-8 animate-pulse text-sm text-muted">Waking up the scanner…</p>}
+      {isScanning && !isWaking && <ScanProgress agentResults={agentResults} targetType={targetType} />}
 
       {error && (
         <div className="mt-10 border-l-2 border-critical pl-4">

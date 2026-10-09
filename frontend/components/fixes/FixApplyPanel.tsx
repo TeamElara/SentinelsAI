@@ -405,8 +405,8 @@ function VerificationView({ result }: { result: VerificationResult }) {
 
       <p className="font-mono text-[8px] leading-relaxed text-rule">
         The {result.agent} agent was re-run against {result.ref} and its findings replaced
-        in the stored report; the score is the same deterministic calculation the scan
-        used. The original scan is unchanged.
+        for this comparison. Both scores use {result.scorer_version ?? "legacy-v1"}.
+        The original scan remains {result.stored_score ?? "unchanged"} with scorer {result.stored_scorer_version ?? "legacy-v1"}.
         {!result.recorded && " No fix application was recorded for this finding, so nothing was closed out."}
       </p>
     </div>

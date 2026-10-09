@@ -1,3 +1,5 @@
+import { startScanStream } from './scan-stream';
+export { waitForScannerHealth } from './scanner-health';
 /* The one place the frontend knows the backend exists.
 
    These types are a hand-written mirror of backend/models.py. They are not
@@ -71,11 +73,20 @@ export interface SubdomainEntry {
   issue_count: number;
 }
 
+export interface CheckCoverage {
+  check: string;
+  status: "completed" | "partial" | "skipped" | "unavailable" | "failed";
+  reason: string;
+  required: boolean;
+}
+
 export interface AgentResult {
   agent: string;
   findings: Finding[];
   duration_ms: number;
   error: string | null;
+  coverage: CheckCoverage[];
+  coverage_status: string;
 }
 
 export interface AgentInfo {
@@ -100,6 +111,8 @@ export interface ChecklistItem {
 }
 
 export interface ScanReport {
+  provisional: boolean;
+  scorer_version: string;
   id: string;                             // uuid4, set once the scan is persisted
   url: string;                            // a repo scan's "URL" is its GitHub URL -- same field
   target_type: TargetType;
@@ -190,6 +203,8 @@ export function githubLoginUrl(): string {
 }
 
 export interface ScanStreamHandlers {
+  onWaking?: () => void;
+  onReady?: () => void;
   /** Called once per agent, the instant it finishes — real completion order. */
   onAgent: (result: AgentResult) => void;
   /** Called exactly once, when the full report is ready. */
@@ -198,121 +213,13 @@ export interface ScanStreamHandlers {
   onError: (message: string) => void;
 }
 
-/* EventSource can't see HTTP status codes — a 401 (signed out, or the
-   session expired mid-scan) and a genuinely dead backend both surface as
-   the same opaque `onerror`. Every other call in this file resolves that
-   ambiguity via `checkAuth`'s redirect to `/login`; streams need their own
-   version since there's no Response here to check. `fetchMe` is one cheap
-   extra round-trip, paid only on the error path, never on a healthy scan.
-
-   `fetchMe` itself has no try/catch — a 401 resolves to `null` same as
-   always, but a backend that's actually unreachable makes its `fetch` throw
-   instead of resolving at all. Without catching that here too, the throw
-   would escape as an unhandled rejection and `onError` would never fire —
-   the exact silent-failure regression this function exists to avoid. */
-async function handleStreamError(handlers: ScanStreamHandlers): Promise<void> {
-  let me: SessionUser | null;
-  try {
-    me = await fetchMe();
-  } catch {
-    handlers.onError("Lost connection to the scanner.");
-    return;
-  }
-  if (me === null && typeof window !== "undefined") {
-    window.location.href = "/login";
-    return;
-  }
-  handlers.onError("Lost connection to the scanner.");
+/** Streaming retries join one server-side job using an unchanged request ID. */
+export function streamScan(url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
+  return startScanStream(API_BASE, '/scan/stream', url, handlers, permissionConfirmed);
 }
 
-/**
- * Open a live connection to `GET /scan/stream` and report each agent as it
- * finishes, then the completed report. Returns a function that closes the
- * connection — callers aren't required to use it (see the note on `onDone`
- * below for why this component doesn't need to), but it's returned so a
- * caller with a reason to cancel early always has one.
- */
-export function streamScan(url: string, handlers: ScanStreamHandlers): () => void {
-  // encodeURIComponent, not raw interpolation — url is user-typed text ending
-  // up in a query string; without escaping, a stray "&" or "#" in it would
-  // split the URL into extra query params instead of reaching the backend.
-  //
-  // { withCredentials: true } is EventSource's own equivalent of fetch's
-  // credentials: "include" — without it the session cookie never reaches
-  // this cross-port request either, and the stream 401s before the first event.
-  const source = new EventSource(
-    `${API_BASE}/scan/stream?url=${encodeURIComponent(url)}`,
-    { withCredentials: true },
-  );
-
-  source.addEventListener("agent", (event) => {
-    handlers.onAgent(JSON.parse((event as MessageEvent).data) as AgentResult);
-  });
-
-  source.addEventListener("done", (event) => {
-    handlers.onDone(JSON.parse((event as MessageEvent).data) as ScanReport);
-    // EventSource auto-reconnects on ANY closed connection, including a
-    // normal end-of-stream — without this, the browser would reopen the
-    // connection a few seconds later and silently re-run the whole scan.
-    source.close();
-  });
-
-  // Our own application-level failure (a rejected URL) — named "failed", not
-  // "error". EventSource reserves the plain "error" event for connection-level
-  // problems; reusing that name for our own message would make the two
-  // impossible to tell apart in the handler below.
-  source.addEventListener("failed", (event) => {
-    const body = JSON.parse((event as MessageEvent).data) as { detail?: string };
-    handlers.onError(body.detail ?? "The scan could not be run.");
-    source.close();
-  });
-
-  source.onerror = () => {
-    // Could be a genuine connection-level failure (backend unreachable, or
-    // the connection dropped before "done" arrived) or a 401 EventSource
-    // can't distinguish from one. handleStreamError tells them apart and
-    // redirects on the auth case instead of dead-ending on this message.
-    source.close();
-    void handleStreamError(handlers);
-  };
-
-  return () => source.close();
-}
-
-/**
- * Open a live connection to `GET /repo/stream` and report each agent as it
- * finishes, then the completed report. The repo-side sibling of
- * `streamScan` — same SSE event names (`agent`, `done`, `failed`), same
- * error/close handling; only the endpoint and the query param's meaning
- * (a GitHub URL, not a website URL) differ.
- */
-export function streamRepoScan(repoUrl: string, handlers: ScanStreamHandlers): () => void {
-  const source = new EventSource(
-    `${API_BASE}/repo/stream?url=${encodeURIComponent(repoUrl)}`,
-    { withCredentials: true },
-  );
-
-  source.addEventListener("agent", (event) => {
-    handlers.onAgent(JSON.parse((event as MessageEvent).data) as AgentResult);
-  });
-
-  source.addEventListener("done", (event) => {
-    handlers.onDone(JSON.parse((event as MessageEvent).data) as ScanReport);
-    source.close();
-  });
-
-  source.addEventListener("failed", (event) => {
-    const body = JSON.parse((event as MessageEvent).data) as { detail?: string };
-    handlers.onError(body.detail ?? "The scan could not be run.");
-    source.close();
-  });
-
-  source.onerror = () => {
-    source.close();
-    void handleStreamError(handlers);
-  };
-
-  return () => source.close();
+export function streamRepoScan(url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
+  return startScanStream(API_BASE, '/repo/stream', url, handlers, permissionConfirmed);
 }
 
 /**
@@ -570,6 +477,9 @@ export type FixApplicationState =
 // Mirrors `VerificationResult` (Stage C). Every number here came from re-running
 // one agent against the repo and calling the same deterministic scorer twice.
 export interface VerificationResult {
+  scorer_version: string;
+  stored_scorer_version: string;
+  stored_score: number | null;
   scan_id: string;
   finding_key: string;
   agent: string;
@@ -656,6 +566,21 @@ export async function revokeInstallation(installationId: number): Promise<void> 
   );
   checkAuth(res);
   if (!res.ok) await raiseApiError(res, `Couldn't disconnect (${res.status})`);
+}
+
+/** Delete the signed-in account and everything it owns. `confirmLogin` has to
+ *  be the account's own GitHub login — the backend refuses anything else. */
+export async function deleteAccount(confirmLogin: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/account`,
+    withAuth({
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_login: confirmLogin }),
+    }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't delete the account (${res.status})`);
 }
 
 /* ---------------------------------------------------------------------------
@@ -760,6 +685,7 @@ export async function verifyFinding(
     withAuth({ method: "POST" }),
   );
   checkAuth(res);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("usage-changed"));
   if (!res.ok) await raiseApiError(res, `Couldn't verify this fix (${res.status})`);
   return res.json() as Promise<VerificationResult>;
 }
@@ -813,6 +739,7 @@ export async function fetchFix(
   const url = `${API_BASE}/scans/${encodeURIComponent(scanId)}/findings/${encodeURIComponent(findingKey)}/fix${regenerate ? "?regenerate=true" : ""}`;
   const res = await fetch(url, withAuth({ method: "POST" }));
   checkAuth(res);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("usage-changed"));
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { detail?: string }).detail ?? `Fix unavailable (${res.status})`);
@@ -834,6 +761,7 @@ export async function postChatMessage(
     body: JSON.stringify({ question }),
   }));
   checkAuth(res);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("usage-changed"));
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { detail?: string }).detail ?? `Chat unavailable (${res.status})`);
@@ -857,21 +785,29 @@ export async function fetchChatHistory(scanId: string): Promise<ChatMessage[]> {
 }
 
 /**
- * POST the report already sitting in this page's state to `POST /scan/pdf`
- * and save the PDF it comes back with. No re-scan involved — the backend
- * prints exactly the report handed to it, so the file always matches what's
- * on screen (see the endpoint's docstring in `backend/main.py`).
+ * Download the stored report as a PDF from `GET /scans/{id}/export/pdf`. The
+ * backend prints its own stored copy of the scan, never a report sent by the
+ * browser, so only the scan's owner can get one — and a scan is immutable
+ * once saved, so the file matches what's on screen.
  */
+export async function fetchExportFormats(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/export/formats`, withAuth());
+  if (!response.ok) throw new Error("Couldn't load export formats.");
+  const formats: { format_id: string }[] = await response.json();
+  return formats.map((format) => format.format_id);
+}
+
 export async function downloadReportPdf(report: ScanReport): Promise<void> {
-  const response = await fetch(`${API_BASE}/scan/pdf`, withAuth({
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(report),
-  }));
+  const response = await fetch(
+    `${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`,
+    withAuth(),
+  );
   checkAuth(response);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("usage-changed"));
 
   if (!response.ok) {
-    throw new Error(`PDF export failed (${response.status})`);
+    const body = await response.json().catch(() => ({})) as { detail?: string };
+    throw new Error(body.detail ?? `PDF export failed (${response.status})`);
   }
 
   // A Blob is the browser's handle to binary data it hasn't decoded as text

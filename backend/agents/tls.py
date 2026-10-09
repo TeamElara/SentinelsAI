@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from agents.base import BaseAgent, ScanContext
 from models import EvidenceKind, Finding, Severity, Status
+from scan_coverage import record
+from net.policy import ALLOWED_PORTS, BlockedTarget, resolve_and_check_sync
 
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
 
@@ -39,11 +42,39 @@ def fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, s
     does. If verification fails (expired, untrusted, wrong hostname), this
     raises `ssl.SSLError` before returning anything; that's caught one level
     up, in `TLSAgent.scan()`.
+
+    The socket goes to an address the outbound policy vetted, not to
+    `hostname` — handing the name to `create_connection` would resolve it
+    again, unchecked. `server_hostname` is still the name, so SNI and the
+    certificate check are unchanged. Raises `BlockedTarget` for a host the
+    policy refuses.
     """
+    if port not in ALLOWED_PORTS:
+        raise BlockedTarget("Only ports 80 and 443 can be scanned.")
+    deadline = time.monotonic() + timeout
+    addresses = resolve_and_check_sync(hostname)
+
     context = ssl.create_default_context()
-    with socket.create_connection((hostname, port), timeout=timeout) as sock:
-        with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-            return ssock.getpeercert(), ssock.version()
+    last_error: OSError | None = None
+    for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("TLS connection budget exhausted.")
+        try:
+            sock = socket.create_connection((address, port), timeout=remaining)
+        except OSError as exc:
+            # This address is down; another vetted one may not be.
+            last_error = exc
+            continue
+        with sock:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TLS handshake budget exhausted.")
+            sock.settimeout(remaining)
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                return ssock.getpeercert(), ssock.version()
+    assert last_error is not None  # resolve_and_check_sync never returns []
+    raise last_error
 
 
 class TLSAgent(BaseAgent):
@@ -62,6 +93,9 @@ class TLSAgent(BaseAgent):
         parsed = urlsplit(context.url)
 
         if parsed.scheme != "https":
+            record(self.checks[0], "completed", "Target uses HTTP; HTTPS absence was observed.")
+            for check in self.checks[1:]:
+                record(check, "skipped", "No TLS certificate or protocol to inspect on an HTTP target.")
             evidence_text = f"Scanned URL uses the '{parsed.scheme}' scheme, not https."
             return [Finding(
                 id="tls-not-used",
@@ -93,7 +127,16 @@ class TLSAgent(BaseAgent):
             cert, protocol_version = await asyncio.to_thread(
                 fetch_certificate, hostname, port, 10.0
             )
+        except BlockedTarget as exc:
+            status = "unavailable" if exc.reason == "That host could not be resolved." else "skipped"
+            for check in self.checks:
+                record(check, status, exc.reason)
+            return []
         except ssl.SSLError as exc:
+            record(self.checks[0], "completed", "HTTPS was attempted.")
+            record(self.checks[1], "completed", "TLS verification failed and is reported as a finding.")
+            for check in self.checks[2:]:
+                record(check, "unavailable", "Verified handshake did not provide certificate/protocol details.")
             # Covers an expired cert, an untrusted/self-signed chain, and a
             # hostname mismatch — all three raise SSLError, with the real
             # OpenSSL reason text already in `exc`. A DNS failure or refused

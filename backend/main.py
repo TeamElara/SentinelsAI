@@ -8,22 +8,27 @@ Run locally:
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 from urllib.parse import urlparse
 
 import secrets
 
+import anyio
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # Loads backend/.env into the process's environment (GROQ_API_KEY, if
 # present) once, at startup — so ai/analyst.py's os.environ.get() call later,
@@ -46,6 +51,8 @@ from ai.client import get_api_key  # noqa: E402
 from ai.fixes import get_or_generate_fix  # noqa: E402
 from ai.prompts import PROMPT_VERSION  # noqa: E402
 from auth.deps import current_user, optional_user  # noqa: E402
+from auth.gate import sign_in_refusal  # noqa: E402
+from auth.switches import require_scans_running, require_writes_running  # noqa: E402
 from auth.github_oauth import (  # noqa: E402
     authorize_url,
     exchange_code,
@@ -53,7 +60,9 @@ from auth.github_oauth import (  # noqa: E402
     get_app_slug,
     get_callback_url,
     get_frontend_origin,
+    get_webhook_secret,
     install_url,
+    list_user_installation_ids,
     missing_settings,
     oauth_configured,
 )
@@ -70,21 +79,29 @@ from auth.session import (  # noqa: E402
 from db import init_db  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
-from rate_limit import enforce_scan_rate_limit  # noqa: E402
+from usage import has_reservation  # noqa: E402
+from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
+from remediation.linking import is_valid_name, is_valid_ref  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
 from remediation.planning import NotARepoScan, build_bundle_zip, plan_and_save, preview_plan  # noqa: E402
 from remediation.registry import fixable_findings  # noqa: E402
 from remediation.tokens import fetch_installation  # noqa: E402
 from remediation.verify import VerifyError, verify_finding  # noqa: E402
 from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
-from report.pdf import generate_pdf  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
+from storage.account import delete_account  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
-from storage.installations import list_installations, revoke_installation, save_installation  # noqa: E402
+from storage.installations import (  # noqa: E402
+    InstallationOwnedByAnotherUser,
+    list_installations,
+    revoke_installation,
+    revoke_installation_everywhere,
+    save_installation,
+)
 from storage.scan_links import delete_scan_repo_link, get_scan_repo_link, save_scan_repo_link  # noqa: E402
-from storage.remediation import list_audit, list_audit_for_user, list_fix_applications  # noqa: E402
+from storage.remediation import list_audit, list_audit_for_user, list_fix_applications, write_audit  # noqa: E402
 from storage.repo_files import get_repo_files  # noqa: E402
 from storage.scans import delete_scan, get_scan, list_scans, scan_owner, update_checklist_item  # noqa: E402
 from storage.users import delete_session, sign_in  # noqa: E402
@@ -99,6 +116,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 # Creates backend/data/sentinels.db and brings its schema up to date if it
 # isn't already — safe to call on every startup (see db.init_db's docstring).
@@ -163,6 +182,51 @@ _COOKIE_KWARGS = dict(
     secure=_DEPLOYED_FRONTEND_ORIGIN.startswith("https://"),
     path="/",
 )
+
+
+def load_owned_scan(scan_id: str, user: User) -> ScanReport:
+    """The one way a route reads a stored scan: only its owner gets it back.
+
+    Signing in proves who someone is; it doesn't make every scan theirs, and a
+    scan id being a hard-to-guess UUID is not authorization either. Someone
+    else's scan, an unowned (pre-Stage-0) scan and a scan that doesn't exist
+    all raise the same 404 — a 403 would confirm to a stranger that the id is
+    real.
+    """
+    if scan_owner(scan_id) != user.id:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = get_scan(scan_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    return report
+
+
+# The values of the browser's `Sec-Fetch-Site` header that may start a scan.
+# "same-site" stays allowed because local development runs the frontend on
+# localhost:3000 against the API on localhost:8000, which the browser calls
+# same-site, not same-origin. Production goes through the frontend's own
+# /api rewrite, so it arrives as same-origin.
+_SCAN_START_SITES = {"same-origin", "same-site"}
+
+
+def reject_cross_site_scan_start(request: Request) -> None:
+    """Refuse a scan started from another website.
+
+    The stream routes start a scan from a plain GET, and a `SameSite=lax`
+    session cookie still rides along on a top-level GET navigation from any
+    site. Without this check, a page elsewhere could send a signed-in user
+    to `/scan/stream?url=…` and run a scan on their account and quota.
+
+    Current browsers always send `Sec-Fetch-Site`. A request without it (curl,
+    the test client) is let through to the normal sign-in check, which means
+    a browser too old to send the header isn't protected by this check.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site not in _SCAN_START_SITES:
+        raise HTTPException(
+            status_code=403,
+            detail="Scans can only be started from Sentinels itself.",
+        )
 
 
 @app.get("/")
@@ -245,6 +309,10 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
     if identity is None:
         return _fail("identity_failed")
 
+    refusal = sign_in_refusal(identity.github_id)
+    if refusal is not None:
+        return _fail(refusal)
+
     session_token = new_token()
     sign_in(
         github_id=identity.github_id,
@@ -317,16 +385,25 @@ async def auth_install_callback(
     installation_id: int = 0,
     setup_action: str = "",
     state: str = "",
+    code: str = "",
 ) -> RedirectResponse:
     """GitHub's landing point after the user installs (or configures) the App.
 
-    There is no code-for-token exchange here, and none is needed to trust the
-    result: GitHub only redirects to this URL after the person signed in *on
-    github.com* completed the install screen for that installation, and the
-    `state` cookie ties that redirect to this Sentinels session. What the
-    callback still has to do is ask GitHub *which account* the installation
-    covers — the redirect carries only a number, and `account_login` is what
-    every later write check compares against.
+    The redirect carries an `installation_id` and nothing that proves the
+    person arriving owns it: `state` only ties the redirect to this browser's
+    own session, and anyone can type another account's installation id into
+    the URL. So the callback asks GitHub, as the person:
+
+      1. the `code` GitHub adds (the App's "request user authorization during
+         installation" setting) is traded for a token for whoever completed
+         the flow;
+      2. that token's GitHub id must be the signed-in Sentinels user's;
+      3. the installation id must be one that user can access.
+
+    Only then does it ask GitHub, as the App, *which account* the installation
+    covers — `account_login` is what every later write check compares against.
+    Being able to access an installation still isn't permission to write to
+    its repositories; `remediation/access.py` checks that per repository.
     """
     frontend = get_frontend_origin()
     expected_state = request.cookies.get("sentinels_install_state")
@@ -345,6 +422,20 @@ async def auth_install_callback(
     if user is None:
         return _fail("not_signed_in")
 
+    if not code:
+        return _fail("authorization_required")
+    access_token = await exchange_code(code)
+    if access_token is None:
+        return _fail("authorization_failed")
+    identity = await fetch_identity(access_token)
+    if identity is None or identity.github_id != user.github_id:
+        return _fail("identity_mismatch")
+    accessible = await list_user_installation_ids(access_token)
+    if accessible is None:
+        return _fail("installation_lookup_failed")
+    if installation_id not in accessible:
+        return _fail("installation_not_yours")
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         metadata = await fetch_installation(client, installation_id)
     if metadata is None:
@@ -354,16 +445,90 @@ async def auth_install_callback(
     if not isinstance(account, str) or not account:
         return _fail("installation_lookup_failed")
 
-    save_installation(
-        user_id=user.id,
-        installation_id=installation_id,
-        account_login=account,
-        repo_selection=metadata.get("repository_selection") or "selected",
-        permissions=metadata.get("permissions") or {},
-    )
+    try:
+        save_installation(
+            user_id=user.id,
+            installation_id=installation_id,
+            account_login=account,
+            repo_selection=metadata.get("repository_selection") or "selected",
+            permissions=metadata.get("permissions") or {},
+        )
+    except InstallationOwnedByAnotherUser:
+        return _fail("installation_taken")
 
     response = RedirectResponse(f"{frontend}/settings?installed={account}")
     response.delete_cookie("sentinels_install_state", path="/")
+    return response
+
+
+# What GitHub's `installation` event says about an installation going away.
+# `unsuspend` is deliberately absent: a suspended installation was revoked here
+# and coming back means connecting it again, which re-runs the proof in the
+# install callback instead of trusting a webhook to restore write access.
+_INSTALLATION_ENDED = {"deleted", "suspend"}
+
+
+@app.post("/github/webhook")
+async def github_webhook(request: Request) -> dict:
+    """GitHub tells Sentinels when someone removes or suspends the App.
+
+    Without this, an uninstalled App still shows as connected here. The route
+    has no session — GitHub is the caller — so the request is authenticated by
+    the HMAC signature GitHub puts in `X-Hub-Signature-256`, computed with the
+    shared webhook secret over the raw body. The signature is checked before
+    the body is parsed, and compared in constant time.
+    """
+    secret = get_webhook_secret()
+    if secret is None:
+        raise HTTPException(status_code=503, detail="Webhooks are not configured. Missing: GITHUB_APP_WEBHOOK_SECRET.")
+
+    body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    supplied = request.headers.get("x-hub-signature-256", "")
+    if not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Invalid signature.")
+
+    event = request.headers.get("x-github-event", "")
+    if event == "ping":
+        return {"ok": True}
+    if event != "installation":
+        return {"ok": True, "ignored": event}
+
+    try:
+        payload = json.loads(body)
+        action = payload["action"]
+        installation_id = payload["installation"]["id"]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed installation event.")
+    if not isinstance(installation_id, int) or action not in _INSTALLATION_ENDED:
+        return {"ok": True, "ignored": f"installation.{action}"}
+
+    revoked = revoke_installation_everywhere(installation_id)
+    logger.info("github webhook: installation %s %s, %s grant(s) revoked", installation_id, action, revoked)
+    return {"ok": True, "revoked": revoked}
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm_login: str
+
+
+@app.delete("/account")
+def account_delete(body: DeleteAccountRequest, user: User = Depends(current_user)) -> Response:
+    """Delete the signed-in account and everything it owns (`storage.account`
+    spells out what that covers and what is kept).
+
+    The caller has to send their own GitHub login back, so a stray request
+    can't delete anything. The response clears the session cookie; the
+    session row is already gone with the user. Uninstalling the App on GitHub
+    is something only the user can do, and the page tells them so.
+    """
+    if body.confirm_login.strip().lower() != user.github_login.lower():
+        raise HTTPException(
+            status_code=400, detail="Type your GitHub login exactly to confirm deleting the account."
+        )
+    delete_account(user.id)
+    response = Response(status_code=204)
+    response.delete_cookie(**_COOKIE_KWARGS)
     return response
 
 
@@ -404,6 +569,20 @@ class LinkRepoRequest(BaseModel):
     repo: str
     ref: Optional[str] = None
 
+    @field_validator("repo")
+    @classmethod
+    def _repo_is_a_name(cls, value: str) -> str:
+        if not is_valid_name(value):
+            raise ValueError("repo must be a repository name: letters, digits, '.', '-' and '_' only.")
+        return value
+
+    @field_validator("ref")
+    @classmethod
+    def _ref_is_plain(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not is_valid_ref(value):
+            raise ValueError("ref must be a plain branch, tag or commit name.")
+        return value
+
 
 @app.post("/scans/{scan_id}/link-repo", response_model=ScanRepoLink)
 def scan_link_repo(
@@ -418,15 +597,11 @@ def scan_link_repo(
     no grant on -- the same shape invariant #4 already enforces for applying
     a fix.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     if report.target_type != "url":
         raise HTTPException(
             status_code=400, detail="Only a URL scan can be linked to a repository."
         )
-    if scan_owner(scan_id) != user.id:
-        raise HTTPException(status_code=403, detail="This scan belongs to another user.")
 
     installation = next(
         (i for i in list_installations(user.id) if i.installation_id == body.installation_id),
@@ -446,9 +621,7 @@ def scan_link_repo(
 @app.get("/scans/{scan_id}/link-repo", response_model=Optional[ScanRepoLink])
 def scan_get_link(scan_id: str, user: User = Depends(current_user)) -> ScanRepoLink | None:
     """The repository currently linked to this scan, or `null`."""
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    load_owned_scan(scan_id, user)
     link = get_scan_repo_link(scan_id)
     if link is None or link.user_id != user.id:
         return None
@@ -459,29 +632,56 @@ def scan_get_link(scan_id: str, user: User = Depends(current_user)) -> ScanRepoL
 def scan_unlink_repo(scan_id: str, user: User = Depends(current_user)) -> Response:
     """Unlink a scan's repository. 404 if there was nothing to unlink,
     including a link that belongs to somebody else."""
+    load_owned_scan(scan_id, user)
     if not delete_scan_repo_link(scan_id, user.id):
         raise HTTPException(status_code=404, detail="No linked repository to remove.")
     return Response(status_code=204)
 
 
-@app.post("/scan", response_model=ScanReport)
-async def scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
+class UrlScanRequest(ScanRequest):
+    """`POST /scan`'s body: the address, plus the person saying they may test it."""
+
+    permission_confirmed: bool = False
+
+
+def require_permission(confirmed: bool, user: User, url: str, *, record: bool = True) -> None:
+    """A website scan sends requests to someone's site, so the caller has to say
+    they own it or may test it, and that statement is recorded.
+
+    This records an assertion, not proof of ownership: it makes the person say
+    it, and leaves a row saying they did. Proving ownership (a DNS record or a
+    file on the site) is a later step. The row is written before the scan
+    starts, so it exists even when the scan is then refused. `record=False`
+    checks the statement without logging it again, for a stream reconnecting
+    to a scan whose start was already logged.
+    """
+    if not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that you own this website or have written permission to security-test it.",
+        )
+    if record:
+        write_audit(user.id, None, None, "scan_permission_confirmed", url)
+
+
+@app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
+async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against `request.url` and return the report.
 
     `async def` here (unlike `/health`'s plain `def`) because this endpoint
     genuinely awaits something — `run_scan` awaits real HTTP requests inside
     the agents it calls.
     """
-    enforce_scan_rate_limit(user.id)
+    require_permission(request.permission_confirmed, user, request.url)
     try:
-        return await run_scan(request.url, user_id=user.id)
+        return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
     except ValueError as exc:
         # normalize_url's complaints (empty string, bad scheme, no host) are
         # the client's fault, not the server's — 400, not a 500 crash.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/repo/scan", response_model=ScanReport)
+@app.post("/repo/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
 async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against a public GitHub repo (`request.url`) and
     return the report. The repo-side sibling of `POST /scan` -- same
@@ -494,11 +694,48 @@ async def repo_scan(request: ScanRequest, user: User = Depends(current_user)) ->
     independently reachable and verifiable over real HTTP, the same way
     every other milestone in this codebase has been.
     """
-    enforce_scan_rate_limit(user.id)
     try:
-        return await run_repo_scan(request.url, user_id=user.id)
+        return await scan_operation(user.id, 'repo_scan', lambda: run_repo_scan(request.url, user_id=user.id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@asynccontextmanager
+async def _closing(stream):
+    """Close an async generator when the response using it ends, however it ends.
+
+    A browser that closes the tab cancels the response task mid-stream, and
+    leaves the scan generator suspended at its `yield` until the garbage
+    collector gets to it, so the scan's agents and sockets would keep running
+    in the meantime. Closing it here makes the generator's own `finally`
+    blocks (cancel the agents, close the client, free the scan slot) run at
+    once.
+
+    The close is shielded because the response task is being cancelled: an
+    unshielded `await` here would be cancelled again before the cleanup in
+    the generator could run.
+    """
+    try:
+        yield stream
+    finally:
+        with anyio.CancelScope(shield=True):
+            await stream.aclose()
+
+
+class SseResponse(StreamingResponse):
+    """Close the SSE subscriber when its response ends, including disconnects.
+
+    C7's bounded job owns the orchestrator independently of this subscriber.
+    The job closes and awaits the orchestrator on completion or deadline;
+    reconnecting subscribes to the same job without a second quota charge.
+    """
+
+    async def stream_response(self, send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.body_iterator.aclose()
 
 
 def _sse(event: str, data: str) -> str:
@@ -508,47 +745,43 @@ def _sse(event: str, data: str) -> str:
     return f"event: {event}\ndata: {data}\n\n"
 
 
-@app.get("/scan/stream")
-async def scan_stream(url: str, user: User = Depends(current_user)) -> StreamingResponse:
-    """Same scan as `POST /scan`, reported as it happens instead of all at
-    once. Server-Sent Events, not JSON — a one-way, GET-only, plain-text
-    streaming protocol the browser understands natively via `EventSource`,
-    which is why this takes `url` as a query parameter instead of a JSON
-    body the way `POST /scan` does: `EventSource` can only issue GET.
+@app.get("/scan/stream", dependencies=[Depends(require_scans_running)])
+async def scan_stream(
+    url: str,
+    request: Request,
+    request_id: str,
+    permission_confirmed: bool = False,
+    user: User = Depends(current_user),
+) -> StreamingResponse:
+    """Run or reconnect to an authenticated, bounded SSE scan job.
 
-    Emits one `event: agent` per finished agent (real completion order, not
-    `AGENTS`' declared order), then one `event: done` carrying the complete
-    `ScanReport`. A bad URL can't become a `400` the way it does for
-    `POST /scan` — once the first byte of a streaming response has gone out,
-    the status code (200) is already committed — so it's reported as
-    `event: failed` instead, a message *inside* the otherwise-successful
-    stream.
-
-    `Depends(current_user)` runs — and can 401 — before this function body
-    starts, so an unauthenticated `EventSource` never gets as far as opening
-    the stream. The rate-limit check runs here too, for the same reason: a
-    429 raised before `StreamingResponse` is constructed is a normal HTTP
-    error response; raised from inside `events()` it would just be another
-    in-band SSE message after a 200 already went out.
+    The fetch-based client supplies one canonical UUID request_id across
+    reconnects. Account, operation and target are bound to that reservation.
+    Permission and cross-site guards precede quota reservation. Agents arrive
+    in completion order, followed by the stored report or a failure message.
+    Daily exhaustion is an HTTP 429 before the stream starts; ScanBusy inside
+    the job produces a failed event and refunds its reservation.
     """
-    enforce_scan_rate_limit(user.id)
+    reject_cross_site_scan_start(request)
+    reconnect = await asyncio.to_thread(has_reservation, user.id, 'url_scan', request_id)
+    require_permission(permission_confirmed, user, url, record=not reconnect)
 
     async def events():
-        try:
-            async for event_name, payload in run_scan_stream(url, user_id=user.id):
-                yield _sse(event_name, payload.model_dump_json())
-        except ValueError as exc:
-            yield _sse("failed", json.dumps({"detail": str(exc)}))
-
-    return StreamingResponse(
-        events(),
+        async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
+            async for event_name, payload in stream:
+                yield event_name, payload.model_dump_json()
+    response = await stream_response(user.id, 'url_scan', url, request_id, events)
+    return SseResponse(
+        response.body_iterator,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
+        headers=dict(response.headers),
     )
 
 
-@app.get("/repo/stream")
-async def repo_scan_stream(url: str, user: User = Depends(current_user)) -> StreamingResponse:
+@app.get("/repo/stream", dependencies=[Depends(require_scans_running)])
+async def repo_scan_stream(
+    url: str, request: Request, request_id: str, user: User = Depends(current_user)
+) -> StreamingResponse:
     """Same repo scan as `POST /repo/scan`, reported as it happens instead of
     all at once. The repo-side sibling of `GET /scan/stream` -- same SSE
     shape (`event: agent` per finished agent, one `event: done` at the end,
@@ -556,19 +789,17 @@ async def repo_scan_stream(url: str, user: User = Depends(current_user)) -> Stre
     committed by the time it's known), a different generator underneath
     (`repo_orchestrator.run_repo_scan_stream`).
     """
-    enforce_scan_rate_limit(user.id)
+    reject_cross_site_scan_start(request)
 
     async def events():
-        try:
-            async for event_name, payload in run_repo_scan_stream(url, user_id=user.id):
-                yield _sse(event_name, payload.model_dump_json())
-        except ValueError as exc:
-            yield _sse("failed", json.dumps({"detail": str(exc)}))
-
-    return StreamingResponse(
-        events(),
+        async with _closing(run_repo_scan_stream(url, user_id=user.id)) as stream:
+            async for event_name, payload in stream:
+                yield event_name, payload.model_dump_json()
+    response = await stream_response(user.id, 'repo_scan', url, request_id, events)
+    return SseResponse(
+        response.body_iterator,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
+        headers=dict(response.headers),
     )
 
 
@@ -588,11 +819,9 @@ def repo_agents_list() -> list[AgentInfo]:
 def scans_list(
     limit: int = 20, offset: int = 0, user: User = Depends(current_user)
 ) -> list[ScanSummary]:
-    """List stored scans, newest first. Paginate with `limit` and `offset`.
-
-    Scoped to the caller's own scans plus every unowned (pre-Stage-0) one —
-    see `storage.scans.list_scans`'s docstring for why unowned scans stay
-    visible rather than disappearing after an upgrade.
+    """List the caller's own stored scans, newest first. Paginate with
+    `limit` and `offset`. Unowned (pre-Stage-0) scans are not listed — no
+    account can open them (see `load_owned_scan`).
     """
     limit = min(max(limit, 1), 100)
     return list_scans(limit=limit, offset=offset, user_id=user.id)
@@ -601,9 +830,7 @@ def scans_list(
 @app.get("/scans/{scan_id}", response_model=ScanReport)
 def scans_get(scan_id: str, user: User = Depends(current_user)) -> ScanReport:
     """Return the full stored ScanReport for `scan_id`."""
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     return report
 
 
@@ -614,9 +841,7 @@ def scans_agent_get(scan_id: str, agent_name: str, user: User = Depends(current_
     Used by the per-agent detail page so it only fetches what it needs instead
     of the full report. Returns 404 if either the scan or the agent is missing.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     for result in report.agents:
         if result.agent == agent_name:
             return result
@@ -633,25 +858,16 @@ def scans_files_get(scan_id: str, user: User = Depends(current_user)) -> list[Re
     before ever calling this, but an empty list is also a perfectly valid
     answer on its own, not an error.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    load_owned_scan(scan_id, user)
     return get_repo_files(scan_id)
 
 
 @app.delete("/scans/{scan_id}")
 def scans_delete(scan_id: str, user: User = Depends(current_user)) -> Response:
-    """Delete a scan and all its findings. Returns 204 on success, 404 if not found.
-
-    Ownership is checked here, not just sign-in: deletion is destructive and
-    permanent, so a scan someone else owns returns 403 rather than being
-    silently deletable by anyone who is merely signed in. Unowned (legacy)
-    scans have no owner to protect and stay deletable by any signed-in user,
-    matching how `list_scans` already treats them as shared.
+    """Delete one of the caller's scans and all its findings. Returns 204 on
+    success, and 404 for a scan that doesn't exist or isn't theirs.
     """
-    owner = scan_owner(scan_id)
-    if owner is not None and owner != user.id:
-        raise HTTPException(status_code=403, detail="This scan belongs to another user.")
+    load_owned_scan(scan_id, user)
     if not delete_scan(scan_id):
         raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
     return Response(status_code=204)
@@ -660,9 +876,7 @@ def scans_delete(scan_id: str, user: User = Depends(current_user)) -> Response:
 @app.get("/scans/{scan_id}/checklist", response_model=list[ChecklistItem])
 def checklist_get(scan_id: str, user: User = Depends(current_user)) -> list[ChecklistItem]:
     """Return the deployment checklist for a stored scan."""
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     return report.checklist
 
 
@@ -680,6 +894,7 @@ def checklist_answer(
     Only self_attested items are writable — auto and inferred items are computed
     from findings and cannot be overridden here.
     """
+    load_owned_scan(scan_id, user)
     if body.state not in ("pass", "fail"):
         raise HTTPException(status_code=422, detail="state must be 'pass' or 'fail'")
 
@@ -694,9 +909,7 @@ def checklist_answer(
         )
 
     # Return the updated item from the DB
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     for item in report.checklist:
         if item.item_key == item_key:
             return item
@@ -713,12 +926,7 @@ async def finding_fix(
     cached result instantly. `?regenerate=true` forces a fresh LLM call.
     With no GROQ_API_KEY: returns 503 with a clear message, never a 500.
     """
-    if not get_api_key():
-        raise HTTPException(status_code=503, detail="AI fix suggestions require GROQ_API_KEY.")
-
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
 
     finding = next((f for f in report.findings if f.id == finding_key), None)
     if finding is None:
@@ -727,7 +935,7 @@ async def finding_fix(
             detail=f"Finding {finding_key!r} not found in scan {scan_id!r}",
         )
 
-    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate)
+    suggestion = await get_or_generate_fix(scan_id, finding_key, finding, regenerate=regenerate, user_id=user.id)
     if suggestion is None:
         raise HTTPException(status_code=503, detail="Fix suggestion generation failed. Try again.")
     return suggestion
@@ -745,9 +953,7 @@ def scan_fix_summary(scan_id: str, user: User = Depends(current_user)) -> FixSum
     now" -- a Fixer can still find nothing left to do once it reads the
     repo's current state, which is what `GET .../fix/plan` is for.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
 
     # The scan itself is immutable (conflict #6), so "still needs a fix" has to
     # subtract what fix_applications says is already handled: merged, or
@@ -782,9 +988,7 @@ async def finding_fix_plan(
     1/2 findings ever have one) -- a normal answer, not an error; the
     frontend falls back to the existing AI `FixSuggestionPanel`.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     try:
         return await preview_plan(report, finding_key)
     except NotARepoScan as exc:
@@ -793,8 +997,13 @@ async def finding_fix_plan(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+# Each key is a round of GitHub reads on the installation's shared rate limit.
+MAX_FINDING_KEYS = 100
+FindingKeys = Annotated[list[Annotated[str, Field(max_length=200)]], Field(max_length=MAX_FINDING_KEYS)]
+
+
 class FixPlanRequest(BaseModel):
-    finding_keys: list[str]
+    finding_keys: FindingKeys
 
 
 class FixPlanResult(BaseModel):
@@ -812,9 +1021,7 @@ async def scan_fix_plan(
     (`fixable=False`, `plan=null`) -- one unfixable finding in the batch is
     never a reason to fail the whole request.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     if not body.finding_keys:
         raise HTTPException(status_code=422, detail="finding_keys must not be empty")
 
@@ -836,9 +1043,7 @@ def scan_fix_bundle(scan_id: str, user: User = Depends(current_user)) -> Respons
     (not implemented yet). 404 if nothing has been planned via
     `POST /scans/{id}/fix/plan` yet.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    load_owned_scan(scan_id, user)
 
     bundle = build_bundle_zip(scan_id)
     if bundle is None:
@@ -852,7 +1057,7 @@ def scan_fix_bundle(scan_id: str, user: User = Depends(current_user)) -> Respons
 
 
 class FixApplyRequest(BaseModel):
-    finding_keys: list[str]
+    finding_keys: FindingKeys
     # Defaults to a dry run on purpose. A request that forgets the flag
     # previews; it never pushes. The dangerous option has to be typed.
     dry_run: bool = True
@@ -875,9 +1080,9 @@ async def scan_fix_apply(
     the same checks run and then one branch, one commit, and one pull request
     are created. Sentinels never merges it.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
+    if not body.dry_run:
+        require_writes_running()
 
     try:
         return await apply_fixes(report, user, body.finding_keys, dry_run=body.dry_run)
@@ -896,14 +1101,14 @@ async def scan_fix_applications(
     `state` has to reflect GitHub's answer rather than what Sentinels last
     happened to see.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
     return await refresh_applications(report, user)
 
 
 @app.post(
-    "/scans/{scan_id}/findings/{finding_key}/verify", response_model=VerificationResult
+    "/scans/{scan_id}/findings/{finding_key}/verify",
+    response_model=VerificationResult,
+    dependencies=[Depends(require_scans_running)],
 )
 async def finding_verify(
     scan_id: str, finding_key: str, user: User = Depends(current_user)
@@ -918,14 +1123,14 @@ async def finding_verify(
     that hasn't merged yet is refused rather than verified against the old
     state of the repository.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
 
-    try:
-        return await verify_finding(report, user, finding_key)
-    except VerifyError as exc:
-        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    async def verify():
+        try:
+            return await verify_finding(report, user, finding_key)
+        except VerifyError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return await charged(user.id, 'verify', verify)
 
 
 @app.get("/scans/{scan_id}/audit", response_model=list[AuditLogEntry])
@@ -933,18 +1138,8 @@ def scan_audit(scan_id: str, user: User = Depends(current_user)) -> list[AuditLo
     """The audit trail for one scan (PLAN-v5 Stage E), oldest first -- a thin,
     ownership-checked wrapper over the same `list_audit` Stage B has written
     to since the first pull request, never read back until now.
-
-    Unlike `GET /scans/{id}/fix/applications` (which lets any signed-in user
-    read a legacy unowned scan's history), this refuses outright for a scan
-    that belongs to someone else -- the audit trail is who-did-what, and
-    "who" is exactly what shouldn't leak across accounts.
     """
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
-    owner = scan_owner(scan_id)
-    if owner is not None and owner != user.id:
-        raise HTTPException(status_code=403, detail="This scan belongs to another user.")
+    load_owned_scan(scan_id, user)
     return [AuditLogEntry(**row) for row in list_audit(scan_id)]
 
 
@@ -959,18 +1154,15 @@ async def chat_post(scan_id: str, body: ChatQuestion, user: User = Depends(curre
     Persists both the user question and the assistant answer to the DB so the
     conversation survives refresh. With no GROQ_API_KEY: returns 503, not 500.
     """
+    report = load_owned_scan(scan_id, user)
     if not get_api_key():
         raise HTTPException(status_code=503, detail="Chat requires GROQ_API_KEY.")
 
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
-
     question = body.question.strip()
-    if not question:
-        raise HTTPException(status_code=422, detail="question must not be empty")
+    if not question or len(question) > 12000:
+        raise HTTPException(status_code=422, detail="Question must contain 1–12000 characters.")
 
-    msg = await chat_answer(scan_id, report, report.checklist, question)
+    msg = await chat_answer(scan_id, report, report.checklist, question, user_id=user.id)
     if msg is None:
         raise HTTPException(status_code=503, detail="Chat answer generation failed. Try again.")
     return msg
@@ -979,9 +1171,7 @@ async def chat_post(scan_id: str, body: ChatQuestion, user: User = Depends(curre
 @app.get("/scans/{scan_id}/chat", response_model=list[ChatMessage])
 def chat_history(scan_id: str, user: User = Depends(current_user)) -> list[ChatMessage]:
     """Return the full conversation history for a scan, oldest first."""
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    load_owned_scan(scan_id, user)
     return load_messages(scan_id)
 
 
@@ -1003,12 +1193,10 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
     if exporter is None:
         raise HTTPException(status_code=404, detail=f"Unknown export format {format_id!r}")
 
-    report = get_scan(scan_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Scan {scan_id!r} not found")
+    report = load_owned_scan(scan_id, user)
 
     fixes = load_fixes_for_scan(scan_id, PROMPT_VERSION)
-    content = await exporter.render(report, fixes)
+    content = await pdf_operation(user.id, lambda: exporter.render(report, fixes)) if format_id == 'pdf' else await exporter.render(report, fixes)
 
     host = urlparse(report.url).netloc or "report"
     slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
@@ -1022,28 +1210,7 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
     )
 
 
-@app.post("/scan/pdf")
-async def scan_pdf(report: ScanReport, user: User = Depends(current_user)) -> Response:
-    """Deprecated alias — kept through M17 per PLAN-v2.md, then removed.
-
-    Prints a *finished* report to PDF, taking the whole `ScanReport` as the
-    request body instead of a `url` — the frontend already has one sitting
-    in state the moment the "Download PDF" button is visible. Re-scanning
-    from just the URL was rejected: a live site can change between the two
-    requests, so the PDF could show different findings than the report the
-    user is actually looking at. This way, what downloads is guaranteed to
-    match what's on screen.
-
-    Prefer `GET /scans/{id}/export/pdf` — it also includes cached AI fixes,
-    which this alias (no scan_id, just a bare report) has no way to look up.
-    """
-    pdf_bytes = await generate_pdf(report)
-
-    host = urlparse(report.url).netloc or "report"
-    slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-") or "report"
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="sentinels-{slug}.pdf"'},
-    )
+# `/usage` is registered directly rather than through `budgeted_operations`'s
+# router so it is plainly part of `app.routes`, which A2's route inventory test
+# walks.
+app.add_api_route('/usage', get_usage, methods=['GET'])
