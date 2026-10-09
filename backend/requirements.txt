@@ -12,3 +12,5 @@ playwright==1.61.0
 PyJWT==2.15.1
 cryptography==50.0.1
 libsql==0.1.11
+# Optional error reporting (observability.py); inert unless SENTRY_DSN is set.
+sentry-sdk==2.71.0

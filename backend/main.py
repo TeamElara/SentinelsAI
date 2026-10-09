@@ -77,6 +77,7 @@ from auth.session import (  # noqa: E402
     token_from_cookie,
 )
 from db import init_db  # noqa: E402
+from observability import init_sentry  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from usage import has_reservation  # noqa: E402
@@ -118,6 +119,10 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Error reporting; does nothing unless SENTRY_DSN is set. Everything that could
+# identify a scanned site or carry a secret is stripped first (observability.py).
+init_sentry()
 
 # Creates backend/data/sentinels.db and brings its schema up to date if it
 # isn't already — safe to call on every startup (see db.init_db's docstring).
