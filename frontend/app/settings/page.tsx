@@ -22,6 +22,7 @@ import {
   deleteAccount,
   type GitHubInstallation,
 } from "@/lib/api";
+import { GettingStarted } from "@/components/onboarding/GettingStarted";
 import { useSession } from "@/lib/useSession";
 
 const INSTALL_ERRORS: Record<string, string> = {
@@ -219,6 +220,8 @@ export default function SettingsPage() {
       <Suspense fallback={null}>
         <InstallBanner />
       </Suspense>
+
+      <GettingStarted installations={installations} />
 
       <section className="mt-14">
         <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
