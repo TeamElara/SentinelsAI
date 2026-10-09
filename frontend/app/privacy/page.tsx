@@ -13,7 +13,7 @@ export const metadata: Metadata = {
    matching section in the same pull request. Not legal advice — a lawyer
    should read it before the public launch. */
 
-const UPDATED = "8 October 2026";
+const UPDATED = "9 October 2026";
 
 const SECTIONS: LegalSection[] = [
   {
@@ -31,6 +31,7 @@ const SECTIONS: LegalSection[] = [
       "Your chat with the assistant about a scan: the questions you ask and the answers given.",
       "Fixes: the changes Sentinels proposed (which can include the text of the files it would change), whether a pull request was opened, its number and link, and its status.",
       "Connected repositories: if you install the Sentinels GitHub App, the installation number, the account it covers, whether it covers all or selected repositories, and the permissions granted.",
+      "Your daily usage: how many scans, verifications, PDF exports, AI fixes and chat questions you used today, and the scan jobs behind them (the address and whether the job finished), so the daily allowances can be enforced and a scan can be resumed if your connection drops.",
       "A record of actions: when you confirm you may test a website (with the address), and when a pull request is opened for you, with the time. This record exists so that what Sentinels did on someone's behalf can be accounted for.",
     ],
   },
@@ -67,6 +68,7 @@ const SECTIONS: LegalSection[] = [
     items: [
       "Your account, scans, chat, fixes and connected-repository records are kept until you delete them or delete your account.",
       "Sessions end after 14 days or when you sign out.",
+      "If you delete your account, today's usage counts are kept against your GitHub numeric id until the end of that UTC day, so that deleting and signing in again does not reset the daily allowances. Nothing else about your usage is kept.",
       "Server logs are kept by the hosting providers under their own schedules.",
       "After you delete your account, the record of actions (see above) is kept without your name on it, because the pull requests it describes remain on GitHub. Backups made by our hosting providers age out on their schedule.",
     ],

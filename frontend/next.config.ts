@@ -2,8 +2,8 @@ import type { NextConfig } from "next";
 
 /* Security headers for every response this frontend serves (Launch Plan C11).
 
-   A security scanner should pass its own scan, and these are the headers it
-   looks for. What each one does, in order:
+   Check deployed response headers and browser behavior directly; a scanner
+   score is only supplementary evidence. What each header does, in order:
 
    - Content-Security-Policy: only this origin may supply scripts, styles,
      images, fonts and connections, nothing may be embedded as <object>, and
@@ -26,7 +26,7 @@ import type { NextConfig } from "next";
    not, but nonces need every page rendered per request, and this app has
    statically generated pages. Next's own scripts are inline, so without a nonce
    they would be blocked. Until that trade is made on purpose, an injected
-   inline script would still run, and the scanner will say so; `frame-ancestors`,
+   inline script would still run; `frame-ancestors`,
    `object-src`, `base-uri`, `form-action` and `connect-src` still hold. */
 
 const isDev = process.env.NODE_ENV === "development";

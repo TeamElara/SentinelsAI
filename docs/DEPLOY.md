@@ -27,6 +27,7 @@ for the full explanation of each one. The short version:
 | `GITHUB_APP_SLUG` / `GITHUB_APP_ID` | Only for autofix | Needed to open pull requests, not for sign-in. |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | Only for autofix | See below — this is the one setting that needs a Render-specific trick. |
 | `GROQ_API_KEY` | No | Scans work fully without it; only the AI summary sentence is skipped. |
+| `SENTINELS_PDF_ENABLED` | No | Leave unset (off) on Render: PDF export needs Chromium, which this build doesn't install and whose memory use on a 512 MB instance hasn't been measured. See `docs/NETWORK-EGRESS.md`. |
 
 ### The GitHub App private key on Render
 
@@ -51,6 +52,14 @@ Vercel → New Project → import this repo → set **Root Directory** to
 | `NEXT_PUBLIC_API_BASE` | Your Render backend URL, e.g. `https://sentinels-api.onrender.com` |
 
 ## 3. After both are live
+
+The draft Track B/C integration activates durable daily quotas and `/usage`.
+Run one backend worker. The fetch SSE client requires a canonical UUID
+`request_id`; reconnects must retain that same ID. A disconnected subscriber
+leaves one bounded job running, and deadline failures or ScanBusy refund
+quota. Both REST and SSE share the daily counters. See
+[Track B/C handoff](TRACK-B-C-HANDOFF.md) for verification and remaining
+remote database/deployment gates before releasing that integration.
 
 - Update the GitHub App's **Homepage URL** (App settings page) to the Vercel
   domain instead of `localhost:3000`.

@@ -23,7 +23,7 @@ import contextlib
 import time
 from collections.abc import AsyncIterator, Awaitable, Iterator
 
-from models import AgentResult
+from models import AgentResult, CheckCoverage
 
 # Longest a scan's agents may run, start to finish. A normal URL scan takes
 # 20-25 s (the subdomain agent dominates), so this only ever ends a scan
@@ -134,14 +134,16 @@ async def run_with_deadline(
         await cancel_and_wait(timed_out)
         pending = set()
         for task in timed_out:
+            reason = (
+                f"TimeoutError: stopped at the scan's {SCAN_DEADLINE_SECONDS:.0f}-second "
+                "deadline before this check finished"
+            )
             yield AgentResult(
                 agent=names[task],
                 findings=[],
                 duration_ms=int((time.perf_counter() - started) * 1000),
-                error=(
-                    f"TimeoutError: stopped at the scan's {SCAN_DEADLINE_SECONDS:.0f}-second "
-                    "deadline before this check finished"
-                ),
+                error=reason,
+                coverage=[CheckCoverage(check="Agent execution", status="failed", reason=reason)],
             )
     finally:
         await cancel_and_wait(pending)

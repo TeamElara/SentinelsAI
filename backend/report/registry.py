@@ -8,6 +8,7 @@ from report.base import Exporter
 from report.json_export import JsonExporter
 from report.markdown import MarkdownExporter
 from report.pdf import PdfExporter
+from report import pdf
 
 _EXPORTERS: dict[str, Exporter] = {
     exporter.format_id: exporter
@@ -27,4 +28,5 @@ def list_formats() -> list[dict[str, str]]:
             "extension": exporter.extension,
         }
         for exporter in _EXPORTERS.values()
+        if exporter.format_id != "pdf" or pdf.pdf_enabled()
     ]

@@ -70,6 +70,9 @@ async def test_stalled_agent_is_cancelled_at_the_deadline_and_reported_failed():
     for timed_out in results[1:]:
         assert timed_out.findings == []
         assert "TimeoutError" in timed_out.error and "deadline" in timed_out.error
+        assert timed_out.coverage_status == "failed"
+        assert timed_out.coverage[0].status == "failed"
+        assert timed_out.coverage[0].reason == timed_out.error
     assert sorted(agents.cancelled) == ["slow-a", "slow-b"]
     assert _other_tasks() == set()
 
@@ -250,6 +253,7 @@ async def test_disconnected_stream_closes_its_sockets(monkeypatch, temp_db, fres
         await server.wait_closed()
 
     assert fresh_slots.running == 0
+    await asyncio.sleep(0)  # Let Windows' cancelled accept operation finish.
     assert _other_tasks() == set()
 
 

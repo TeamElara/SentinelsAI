@@ -34,8 +34,8 @@ from checklist.evaluator import compute_readiness, evaluate
 from checklist.repo_rules import REPO_RULES
 from models import AgentResult, RepoFileEntry, ScanReport
 from repo.fetch import parse_github_url, fetch_repo
-from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
 from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
+from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
 from storage.scans import save_scan
 
 # R12: guesses a file-tree badge language from its extension. Deliberately a

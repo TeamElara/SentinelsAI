@@ -11,9 +11,34 @@ this scan's files", not three copies of the same branch.
 """
 from __future__ import annotations
 
+import re
+
 from models import ScanReport
 from repo.fetch import parse_github_url
 from storage.scan_links import get_scan_repo_link
+
+
+# GitHub owner and repository names are letters, digits, `.`, `-` and `_`.
+# Anything else (a `/`, `?`, `#`, `%`) would change which GitHub API path the
+# installation token is sent to, since both are pasted into request URLs.
+_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+
+
+def is_valid_name(name: str) -> bool:
+    """Whether `name` is safe as one GitHub owner or repository path segment."""
+    return bool(_NAME_RE.match(name)) and name not in {".", ".."}
+
+
+def is_valid_ref(ref: str) -> bool:
+    """Whether `ref` is a plain branch, tag or sha: no `..`, no empty segments."""
+    return (
+        bool(_REF_RE.match(ref))
+        and ".." not in ref
+        and not ref.startswith("/")
+        and not ref.endswith("/")
+        and "//" not in ref
+    )
 
 
 class NoRepoTarget(ValueError):
@@ -37,5 +62,15 @@ def repo_target(report: ScanReport) -> tuple[str, str, str | None]:
         raise NoRepoTarget(
             f"Scan {report.id!r} is a URL scan with no linked repository yet. "
             "Link one before planning, applying, or verifying a fix."
+        )
+    # Rows saved before link-repo validated its input may hold anything.
+    if not (
+        is_valid_name(link.owner)
+        and is_valid_name(link.repo)
+        and (link.ref is None or is_valid_ref(link.ref))
+    ):
+        raise NoRepoTarget(
+            f"Scan {report.id!r} is linked to a repository name Sentinels can't use. "
+            "Unlink it and link the repository again."
         )
     return link.owner, link.repo, link.ref

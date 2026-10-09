@@ -3,6 +3,7 @@ backend records that they did (Launch Plan A6)."""
 from __future__ import annotations
 
 import pytest
+from uuid import uuid4
 
 from tests.test_main_audit import SECRET, _signed_in_cookie
 
@@ -97,9 +98,9 @@ def test_a_confirmed_scan_runs_and_is_recorded(client, scans_started):
 def test_the_streaming_scan_needs_it_as_well(client, scans_started):
     user = _as(client)
 
-    refused = client.get("/scan/stream", params={"url": "https://example.com"})
+    refused = client.get("/scan/stream", params={"url": "https://example.com", "request_id": str(uuid4())})
     allowed = client.get(
-        "/scan/stream", params={"url": "https://example.com", "permission_confirmed": "true"}
+        "/scan/stream", params={"url": "https://example.com", "permission_confirmed": "true", "request_id": str(uuid4())}
     )
 
     assert refused.status_code == 400
@@ -116,7 +117,7 @@ def test_a_cross_site_request_cannot_supply_the_confirmation_for_the_user(client
 
     res = client.get(
         "/scan/stream",
-        params={"url": "https://example.com", "permission_confirmed": "true"},
+        params={"url": "https://example.com", "permission_confirmed": "true", "request_id": str(uuid4())},
         headers={"Sec-Fetch-Site": "cross-site"},
     )
 

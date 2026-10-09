@@ -37,10 +37,10 @@ from agents.registry import AGENTS
 from ai.analyst import summarize
 from checklist.evaluator import compute_readiness, evaluate
 from models import AgentResult, ScanReport
+from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from net.client import make_scan_client
 from net.policy import BlockedTarget, check_target
 from scan_limits import SCAN_DEADLINE_SECONDS, run_with_deadline, scan_slots
-from scoring import SCORER_VERSION, calculate_score, count_by_severity, grade_for_score
 from storage.scans import save_scan
 
 # Matches ANY "word://" prefix (http, https, ftp, javascript, ...) — not just

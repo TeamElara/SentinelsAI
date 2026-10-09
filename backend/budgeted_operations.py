@@ -12,13 +12,15 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
+
+from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from auth.deps import current_user
 from db import get_connection
 from models import User
-from rate_limit import enforce_scan_rate_limit
+from rate_limit import enforce_scan_rate_limit, refund_scan_rate_limit
 from storage.scans import get_scan, scan_owner
 from usage import reserve, usage_for
 
@@ -31,25 +33,55 @@ def _is_busy(exc):
         return False
     return isinstance(exc, ScanBusy)
 
-router = APIRouter()
 _scan_slots = asyncio.Semaphore(2)
 _pdf_slots = asyncio.Semaphore(1)
 _jobs: dict[str, Job] = {}
 MAX_PENDING = 8
+# One person may not fill the whole scanner: with a per-user cap the rest of
+# the invite list still gets a turn.
+MAX_PENDING_PER_USER = 2
 DEADLINE_SECONDS = 150
+# How long a job may wait for a free slot before it is turned away. The
+# deadline above starts only once a slot is held, so waiting in line never eats
+# into a job's own time. Queue wait plus deadline stays under
+# `usage.STALE_SECONDS`, which is what lets another worker tell a dead job from
+# a waiting one.
+QUEUE_SECONDS = 20
 
 
-@router.get('/usage')
 def get_usage(user: User = Depends(current_user)):
     return usage_for(user.id)
 
 
-async def charged(user_id, kind, operation, *, unavailable_none=False):
-    """Charge once on start; refund server failure, cancellation or no AI result."""
+def _busy():
+    return HTTPException(503, 'Sentinels is busy right now. Try again in a minute; nothing was charged.',
+                         headers={'Retry-After': '5'})
+
+
+async def _acquire(slot):
+    """Wait a bounded time for a slot, then give up with a 503 (refunded by callers)."""
+    try:
+        await asyncio.wait_for(slot.acquire(), QUEUE_SECONDS)
+    except TimeoutError:
+        raise _busy() from None
+
+
+async def charged(user_id, kind, operation, *, unavailable_none=False, slot=None):
+    """Charge once on start; refund server failure, cancellation or no AI result.
+
+    With `slot`, the operation runs while holding that semaphore. Waiting for it
+    is bounded by QUEUE_SECONDS and is outside the operation's own deadline.
+    """
     reservation = await asyncio.to_thread(reserve, user_id, kind)
     try:
-        async with asyncio.timeout(DEADLINE_SECONDS):
-            result = await operation()
+        if slot is not None:
+            await _acquire(slot)
+        try:
+            async with asyncio.timeout(DEADLINE_SECONDS):
+                result = await operation()
+        finally:
+            if slot is not None:
+                slot.release()
         if unavailable_none and result is None:
             await asyncio.to_thread(reservation.refund)
         else:
@@ -74,18 +106,22 @@ async def charged(user_id, kind, operation, *, unavailable_none=False):
 
 
 async def scan_operation(user_id, kind, operation):
-    enforce_scan_rate_limit(user_id)
-    async def run():
-        async with _scan_slots:
-            return await operation()
-    return await charged(user_id, kind, run)
+    ticket = enforce_scan_rate_limit(user_id)
+    try:
+        return await charged(user_id, kind, operation, slot=_scan_slots)
+    except BaseException as exc:
+        if not isinstance(exc, ValueError) and not (
+            isinstance(exc, HTTPException) and exc.status_code < 500 and exc.status_code != 429
+        ):
+            refund_scan_rate_limit(user_id, ticket)
+        raise
 
 
 async def pdf_operation(user_id, operation):
-    async def render():
-        async with _pdf_slots:
-            return await operation()
-    return await charged(user_id, 'pdf', render)
+    from report.pdf import PdfDisabled, pdf_enabled
+    if not pdf_enabled():
+        raise PdfDisabled()
+    return await charged(user_id, 'pdf', operation, slot=_pdf_slots)
 
 
 @dataclass
@@ -95,6 +131,7 @@ class Job:
     done: bool = False
     finished_at: float = 0
     task: asyncio.Task | None = None
+    user_id: int | None = None
 
     async def emit(self, event, data):
         async with self.condition:
@@ -130,26 +167,53 @@ def _finish(reservation_id, *, scan_id=None, error=None):
         conn.close()
 
 
-async def _run(job, reservation, runner):
+def _is_user_error(exc):
+    """A ValueError the scan raised on purpose, whose message is meant for the user.
+
+    JSON and pydantic errors are ValueErrors too, but their text describes our
+    own internals, not the user's request.
+    """
+    return isinstance(exc, ValueError) and not isinstance(exc, (json.JSONDecodeError, ValidationError))
+
+
+async def _run(job, reservation, runner, user_id=None, burst_ticket=None):
     try:
-        async with asyncio.timeout(DEADLINE_SECONDS):
-            async with _scan_slots:
+        await _acquire(_scan_slots)
+        try:
+            async with asyncio.timeout(DEADLINE_SECONDS):
                 async with aclosing(runner()) as events:
                     async for event, data in events:
                         if event == 'done':
                             scan_id = json.loads(data)['id']
                             await asyncio.to_thread(_finish, reservation.id, scan_id=scan_id)
                         await job.emit(event, data)
+        finally:
+            _scan_slots.release()
         if not job.done:
             raise RuntimeError('Scan ended without a stored report')
     except BaseException as exc:
-        message = str(exc) if isinstance(exc, ValueError) else 'Scanner could not complete this job. Its daily allowance was refunded.'
-        if isinstance(exc, ValueError) and not _is_busy(exc):
+        if job.done:
+            # The report was already stored and announced; a late failure
+            # (cleanup, a deadline landing as the stream closed) must not turn
+            # a finished job into a failed one.
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return
+        if isinstance(exc, HTTPException) and exc.status_code == 503:
+            message = exc.detail
+        elif _is_user_error(exc):
+            message = str(exc)
+        else:
+            message = 'Scanner could not complete this job. Its daily allowance was refunded.'
+        if _is_user_error(exc) and not _is_busy(exc):
             await asyncio.to_thread(reservation.complete)
         else:
             await asyncio.shield(asyncio.to_thread(reservation.refund))
+            refund_scan_rate_limit(user_id, burst_ticket)
         await asyncio.to_thread(_finish, reservation.id, error=message)
         await job.emit('failed', json.dumps({'detail': message}))
+        if isinstance(exc, asyncio.CancelledError):
+            raise
 
 
 async def _events(job):
@@ -189,14 +253,17 @@ async def stream_response(user_id, kind, target, request_id, runner):
         if sum(not j.done for j in _jobs.values()) >= MAX_PENDING:
             await asyncio.to_thread(reservation.refund)
             raise HTTPException(503, 'Scanner is busy. Try again shortly.', headers={'Retry-After': '5'})
+        if sum(not j.done and j.user_id == user_id for j in _jobs.values()) >= MAX_PENDING_PER_USER:
+            await asyncio.to_thread(reservation.refund)
+            raise HTTPException(429, 'You already have scans waiting or running. Let them finish first.', headers={'Retry-After': '5'})
         try:
-            enforce_scan_rate_limit(user_id)
+            burst_ticket = enforce_scan_rate_limit(user_id)
         except HTTPException:
             await asyncio.to_thread(reservation.refund)
             raise
-        job = Job()
+        job = Job(user_id=user_id)
         _jobs[reservation.id] = job
-        job.task = asyncio.create_task(_run(job, reservation, runner))
+        job.task = asyncio.create_task(_run(job, reservation, runner, user_id, burst_ticket))
     elif job is None:
         row = await asyncio.to_thread(_job_row, reservation.id)
         job = Job()

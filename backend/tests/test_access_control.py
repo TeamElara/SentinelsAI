@@ -47,6 +47,7 @@ OWN_AUTH = {
 }
 
 SIGNED_IN = {
+    ("GET", "/usage"),
     ("GET", "/auth/me"),
     ("GET", "/auth/github/install"),
     ("GET", "/installations"),

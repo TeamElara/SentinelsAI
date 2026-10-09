@@ -1,0 +1,17 @@
+{
+  "reviewed_commit": "e47197b0dc30368798e382f7f6a08953d0698307",
+  "no_real_dns_or_sockets": true,
+  "dns": {
+    "connect_timeout_seconds": 0.005,
+    "elapsed_seconds": 0.0633,
+    "connected_after_budget": true
+  },
+  "address_retries": {
+    "connect_timeout_seconds": 0.02,
+    "elapsed_seconds": 0.0762,
+    "timeouts_passed_to_attempts": [
+      0.02,
+      0.02
+    ]
+  }
+}

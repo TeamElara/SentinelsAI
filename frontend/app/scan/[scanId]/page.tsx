@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   downloadReportPdf,
+  fetchExportFormats,
   fetchFixSummary,
   fetchScan,
   type Finding,
@@ -151,7 +152,16 @@ export default function ScanPage() {
   const [notFound, setNotFound] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [pdfEnabled, setPdfEnabled] = useState(false);
   const headerDriftRef = useScrollDrift<HTMLElement>(0.03, 32);
+
+  useEffect(() => {
+    let active = true;
+    fetchExportFormats().then((formats) => {
+      if (active) setPdfEnabled(formats.includes("pdf"));
+    }).catch(() => { if (active) setPdfEnabled(false); });
+    return () => { active = false; };
+  }, [scanId]);
 
   useEffect(() => {
     fetchScan(scanId)
@@ -180,8 +190,8 @@ export default function ScanPage() {
     setExportError(null);
     try {
       await downloadReportPdf(report);
-    } catch {
-      setExportError("Couldn't generate the PDF. Try again.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Couldn't generate the PDF. Try again.");
     } finally {
       setIsExporting(false);
     }
@@ -250,14 +260,14 @@ export default function ScanPage() {
               >
                 New scan
               </Link>
-              <button
+              {pdfEnabled && <button
                 type="button"
                 onClick={handleDownload}
                 disabled={isExporting}
                 className="glass px-5 py-2.5 font-mono text-xs uppercase tracking-[0.2em] transition-colors hover:bg-white/8 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-white/4"
               >
                 {isExporting ? "Preparing…" : "Download PDF"}
-              </button>
+              </button>}
             </div>
           </div>
 

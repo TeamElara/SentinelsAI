@@ -218,8 +218,8 @@ export function streamScan(url: string, handlers: ScanStreamHandlers, permission
   return startScanStream(API_BASE, '/scan/stream', url, handlers, permissionConfirmed);
 }
 
-export function streamRepoScan(url: string, handlers: ScanStreamHandlers): () => void {
-  return startScanStream(API_BASE, '/repo/stream', url, handlers);
+export function streamRepoScan(url: string, handlers: ScanStreamHandlers, permissionConfirmed = false): () => void {
+  return startScanStream(API_BASE, '/repo/stream', url, handlers, permissionConfirmed);
 }
 
 /**
@@ -790,6 +790,13 @@ export async function fetchChatHistory(scanId: string): Promise<ChatMessage[]> {
  * browser, so only the scan's owner can get one — and a scan is immutable
  * once saved, so the file matches what's on screen.
  */
+export async function fetchExportFormats(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/export/formats`, withAuth());
+  if (!response.ok) throw new Error("Couldn't load export formats.");
+  const formats: { format_id: string }[] = await response.json();
+  return formats.map((format) => format.format_id);
+}
+
 export async function downloadReportPdf(report: ScanReport): Promise<void> {
   const response = await fetch(
     `${API_BASE}/scans/${encodeURIComponent(report.id)}/export/pdf`,

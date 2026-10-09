@@ -26,11 +26,13 @@ closes the gap by doing the check where the connection is made:
 from __future__ import annotations
 
 import ssl
+import asyncio
 import zlib
 from typing import Any, AsyncIterator, Iterable
 
 import httpcore
 import httpx
+from scan_coverage import record
 
 from net.policy import (
     ALLOWED_PORTS,
@@ -95,10 +97,23 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
         self._inner = inner or httpcore.AnyIOBackend()
 
     async def connect_tcp(
+        self, host: str, port: int, timeout: float | None = None,
+        local_address: str | None = None, socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        # One budget covers DNS and all address attempts, rather than granting
+        # each stage a fresh timeout. Outer cancellation also stops async DNS.
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+        try:
+            async with asyncio.timeout(timeout):
+                return await self._connect_tcp(host, port, deadline, local_address, socket_options)
+        except TimeoutError as exc:
+            raise httpcore.ConnectTimeout("DNS and TCP connection exceeded the connect timeout.") from exc
+
+    async def _connect_tcp(
         self,
         host: str,
         port: int,
-        timeout: float | None = None,
+        deadline: float | None = None,
         local_address: str | None = None,
         socket_options: Iterable[Any] | None = None,
     ) -> httpcore.AsyncNetworkStream:
@@ -117,7 +132,7 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
                 return await self._inner.connect_tcp(
                     address,
                     port,
-                    timeout=timeout,
+                    timeout=None if deadline is None else max(0, deadline - asyncio.get_running_loop().time()),
                     local_address=local_address,
                     socket_options=socket_options,
                 )
@@ -141,13 +156,21 @@ class _CappedStream(httpx.AsyncByteStream):
     told "give me at most N bytes", httpx's decoders can't.
     """
 
-    def __init__(self, stream: httpx.AsyncByteStream, limit: int, encoding: str | None = None) -> None:
+    def __init__(self, stream: httpx.AsyncByteStream, limit: int, encoding: str | None = None, coverage: dict | None = None) -> None:
         self._stream = stream
         self._limit = limit
         self._encoding = encoding
+        self._coverage = coverage if coverage is not None else {'check': 'HTTP response body'}
+
+    def _incomplete(self, status: str, reason: str) -> None:
+        self._coverage.update(status=status, reason=reason)
+        record(self._coverage['check'], status, reason)
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         remaining = self._limit
+        if remaining <= 0:
+            self._incomplete('partial', 'Response body byte limit reached; completeness was not established.')
+            return
         decoder = None
         if self._encoding in ("gzip", "x-gzip"):
             decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
@@ -161,12 +184,14 @@ class _CappedStream(httpx.AsyncByteStream):
                     data = decoder.decompress(chunk, remaining)
                 except zlib.error:
                     if not (first and self._encoding == "deflate"):
+                        self._incomplete('unavailable', 'Compressed response body could not be decoded completely.')
                         return  # corrupt body: what was decoded so far is the body
                     # Some servers send raw deflate without the zlib header.
                     decoder = zlib.decompressobj(-zlib.MAX_WBITS)
                     try:
                         data = decoder.decompress(chunk, remaining)
                     except zlib.error:
+                        self._incomplete('unavailable', 'Compressed response body could not be decoded completely.')
                         return
             else:
                 data = chunk[:remaining]
@@ -175,7 +200,10 @@ class _CappedStream(httpx.AsyncByteStream):
                 remaining -= len(data)
                 yield data
             if remaining <= 0:
+                self._incomplete('partial', 'Response body byte limit reached; completeness was not established.')
                 return
+        if decoder is not None and not decoder.eof:
+            self._incomplete('unavailable', 'Compressed response body ended before decoding completed.')
 
     async def aclose(self) -> None:
         await self._stream.aclose()
@@ -195,33 +223,40 @@ class _EmptyStream(httpx.AsyncByteStream):
         await self._stream.aclose()
 
 
-def cap_response(response: httpx.Response, limit: int = MAX_BODY_BYTES) -> httpx.Response:
+def cap_response(response: httpx.Response, limit: int = MAX_BODY_BYTES, *, request: httpx.Request | None = None) -> httpx.Response:
     """Return `response` with its body limited to `limit` decoded bytes.
 
     Status and headers are untouched except where they'd now be wrong:
     once the body is decoded here, `Content-Encoding` and `Content-Length`
     no longer describe what the caller will read.
     """
+    if request is not None and request.method == 'HEAD':
+        return response  # HTTP HEAD has no body to assess or decode.
+    coverage = {'check': f'{request.method} {request.url} response body' if request is not None else 'HTTP response body'}
+    extensions = {**response.extensions, 'sentinels_body_coverage': coverage}
     headers = response.headers.copy()
     encoding = headers.get("content-encoding", "identity").strip().lower()
     stream = response.stream
 
     if encoding in ("", "identity"):
-        capped: httpx.AsyncByteStream = _CappedStream(stream, limit)
+        capped: httpx.AsyncByteStream = _CappedStream(stream, limit, coverage=coverage)
     else:
         del headers["content-encoding"]
         headers.pop("content-length", None)
         if encoding in ("gzip", "x-gzip", "deflate"):
-            capped = _CappedStream(stream, limit, encoding)
+            capped = _CappedStream(stream, limit, encoding, coverage)
         else:
             # Not something we asked for (br, zstd, stacked encodings).
             capped = _EmptyStream(stream)
+            coverage.update(status='unavailable', reason=f'Unsupported Content-Encoding {encoding}; response body was not inspected.')
+            record(coverage['check'], coverage['status'], coverage['reason'])
 
     return httpx.Response(
         response.status_code,
         headers=headers,
         stream=capped,
-        extensions=response.extensions,
+        extensions=extensions,
+        request=request,
     )
 
 
@@ -244,7 +279,7 @@ class PolicyTransport(httpx.AsyncBaseTransport):
 
         request.headers["accept-encoding"] = _ACCEPT_ENCODING
         try:
-            return cap_response(await self._inner.handle_async_request(request))
+            return cap_response(await self._inner.handle_async_request(request), request=request)
         except httpx.ConnectError as exc:
             if isinstance(exc.__cause__, _BlockedConnect):
                 raise BlockedRequest(exc.__cause__.reason, request=request) from None

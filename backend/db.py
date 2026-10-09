@@ -398,6 +398,19 @@ CREATE TABLE scan_jobs (
 );
 """
 
+# Today's usage of a deleted account, keyed by the GitHub id sign-in sees, so
+# deleting an account and signing in again does not reset the daily budgets.
+# Rows older than today are pruned the next time anyone deletes an account.
+_V19_SCHEMA = """
+CREATE TABLE usage_carryover (
+    github_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL CHECK(count > 0),
+    PRIMARY KEY(github_id, day, kind)
+);
+"""
+
 # Version 15 is reserved for Track A's users.blocked migration. The ledger
 # below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
@@ -419,6 +432,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (16, _V16_SCHEMA),
     (17, _V17_SCHEMA),
     (18, _V18_SCHEMA),
+    (19, _V19_SCHEMA),
 ]
 
 
@@ -447,10 +461,12 @@ def get_connection() -> sqlite3.Connection:
                 raise RuntimeError("TURSO_AUTH_TOKEN is required for the remote database.")
             # Connect to the primary directly: no local replica, sync delay or
             # ephemeral disk can weaken quotas, ownership or session revocation.
-            conn = Connection(libsql.connect(url, auth_token=token))
+            conn = Connection(libsql.connect(url, auth_token=token, timeout=0))
         else:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            conn = Connection(libsql.connect(str(DB_PATH)))
+            # Native busy waits hold the GIL. Let the compatibility adapter
+            # retry lock contention in Python while the owner can commit.
+            conn = Connection(libsql.connect(str(DB_PATH), timeout=0))
     else:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)

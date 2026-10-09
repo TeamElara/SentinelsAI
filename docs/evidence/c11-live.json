@@ -1,0 +1,7 @@
+{
+  "url": "https://sentinels-omce0bbm5-elara17.vercel.app",
+  "http": [],
+  "browser": {},
+  "status": "pending",
+  "reason": "Vercel deployment protection returned SSO, not an application response."
+}

@@ -14,13 +14,14 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from agents.base import BaseAgent, ScanContext
 from models import EvidenceKind, Finding, Severity, Status
-from net.policy import ALLOWED_PORTS, BlockedTarget, resolve_and_check_sync
 from scan_coverage import record
+from net.policy import ALLOWED_PORTS, BlockedTarget, resolve_and_check_sync
 
 OWASP_CRYPTO_FAILURE = "A02:2021 - Cryptographic Failures"
 
@@ -50,18 +51,26 @@ def fetch_certificate(hostname: str, port: int, timeout: float) -> tuple[dict, s
     """
     if port not in ALLOWED_PORTS:
         raise BlockedTarget("Only ports 80 and 443 can be scanned.")
+    deadline = time.monotonic() + timeout
     addresses = resolve_and_check_sync(hostname)
 
     context = ssl.create_default_context()
     last_error: OSError | None = None
     for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("TLS connection budget exhausted.")
         try:
-            sock = socket.create_connection((address, port), timeout=timeout)
+            sock = socket.create_connection((address, port), timeout=remaining)
         except OSError as exc:
             # This address is down; another vetted one may not be.
             last_error = exc
             continue
         with sock:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TLS handshake budget exhausted.")
+            sock.settimeout(remaining)
             with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                 return ssock.getpeercert(), ssock.version()
     assert last_error is not None  # resolve_and_check_sync never returns []
@@ -118,6 +127,11 @@ class TLSAgent(BaseAgent):
             cert, protocol_version = await asyncio.to_thread(
                 fetch_certificate, hostname, port, 10.0
             )
+        except BlockedTarget as exc:
+            status = "unavailable" if exc.reason == "That host could not be resolved." else "skipped"
+            for check in self.checks:
+                record(check, status, exc.reason)
+            return []
         except ssl.SSLError as exc:
             record(self.checks[0], "completed", "HTTPS was attempted.")
             record(self.checks[1], "completed", "TLS verification failed and is reported as a finding.")
