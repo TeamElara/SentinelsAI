@@ -5,11 +5,14 @@ survive process restarts and use the database primary, never a local replica.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 import uuid
 
 from fastapi import HTTPException
 from db import get_connection
+
+logger = logging.getLogger(__name__)
 
 WORKER_ID = str(uuid.uuid4())
 DEFAULT_LIMITS = {"url_scan": 10, "repo_scan": 10, "verify": 10, "pdf": 10, "ai_fix": 20, "chat": 20}
@@ -20,10 +23,26 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _env_int(name, default):
+    """An integer setting. A value that isn't one falls back to the default.
+
+    Raising instead would surface as a 400 ("invalid literal for int()") on
+    the scan routes, blaming the user for the operator's typo.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a whole number; using the default %s", name, raw, default)
+        return default
+
+
 def _limit(kind):
     if kind not in DEFAULT_LIMITS:
         raise ValueError("Unknown quota kind")
-    value = int(os.environ.get("SENTINELS_DAILY_" + kind.upper(), DEFAULT_LIMITS[kind]))
+    value = _env_int("SENTINELS_DAILY_" + kind.upper(), DEFAULT_LIMITS[kind])
     if value < 0:
         raise ValueError("Daily limits cannot be negative")
     return value
@@ -75,6 +94,22 @@ def _recover_stale(conn, now):
     rows = conn.execute("SELECT id FROM usage_reservations WHERE state='active' AND worker != ? AND created_at < ?", (WORKER_ID, cutoff)).fetchall()
     for row in rows:
         _refund(conn, row["id"])
+
+
+def has_reservation(user_id, kind, request_key):
+    """Whether this user already has a reservation for this request id.
+
+    Used to tell a reconnect from a new start, so a reconnect is not logged
+    as a second permission statement.
+    """
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM usage_reservations WHERE user_id=? AND kind=? AND request_key=?",
+            (user_id, kind, request_key),
+        ).fetchone() is not None
+    finally:
+        conn.close()
 
 
 def _seed_from_carryover(conn, user_id, day):
@@ -147,7 +182,7 @@ def reserve(user_id, kind, *, request_key=None, target=None):
 
 
 def reserve_global_ai():
-    limit = int(os.environ.get("SENTINELS_DAILY_GLOBAL_AI", "100"))
+    limit = _env_int("SENTINELS_DAILY_GLOBAL_AI", 100)
     if limit < 0:
         raise ValueError("Global AI limit cannot be negative")
     day = _now().date().isoformat()
