@@ -149,3 +149,46 @@ default scope. Explicit `elara17`/account scope requests and the authenticated
 protected-deployment fetch still return 403. No authenticated Vercel CLI was
 available. Turso credentials were absent. The remaining access-dependent checks
 need protected-deployment permissions and a secure backend/Turso session.
+# C6 follow-up: remote SDK GIL isolation
+
+The team reproduced a 2,189 ms event-loop gap during native libSQL 0.1.11
+remote connection setup from India. This is a failed responsiveness gate,
+even though the production schema inspection passed. The SDK's synchronous
+connect/query/commit implementation runs native work while holding Python's
+GIL ([pinned SDK source](https://github.com/tursodatabase/libsql-python/blob/v0.1.11/src/lib.rs)).
+A Python thread alone cannot isolate that native work from SSE delivery.
+
+Remote connections now use `remote_db.py`: at most two persistent spawned
+workers per configured database and application process. Each worker owns one
+native connection, and each lease owns its transaction/cursors until close.
+Close rolls back before reuse. Local SQLite/libSQL behavior is unchanged.
+Private OS pipes carry operations; no new network listener or dependency is
+introduced. Pool waits and RPCs are bounded to 30 seconds. A failed/timed-out
+worker is discarded without replaying an ambiguous write; a later lease can
+open a replacement. Normal shutdown closes the workers.
+
+Database work called by async auth, scan, export, chat and remediation paths
+also runs in threads: waiting on a worker pipe directly on the event loop
+would still block it. AI fix generation releases its database lease before
+awaiting quota/LLM work so concurrent requests cannot exhaust the pool while
+waiting for another lease.
+
+Regression tests deliberately hold the native GIL for 2.2 seconds during
+connect and 300 ms during each query/commit. The measured parent event-loop
+gap was 24.97 ms on the development machine, below the unchanged 250 ms gate.
+This is synthetic evidence, **not a remote Turso or Render result**. Process
+tests also cover 12 concurrent quota attempts (five accepted), double refund,
+replay, backup consistency, transaction separation, rollback/reuse, bounded
+capacity, worker death without replay, credential-safe errors and shutdown.
+
+Still required: run the full disposable Turso source/remote-restore acceptance
+on this revision, then measure event-loop gaps, query latency and total memory
+on the actual deployment against Turso in Oregon. The existing Render service
+was still in **Ohio and user-suspended** during this follow-up audit; do not
+assume it is colocated with Turso or resume it on the team's behalf while they
+prepare the deployment. The two worker processes consume
+additional memory; a 512 MB deployment must pass this measurement before
+launch sign-off. Do not widen the 250 ms limit to accommodate a driver stall.
+Keep the production database separate from acceptance fixtures. If an earlier
+acceptance run already populated a disposable database, use fresh empty source
+and restore targets; the acceptance command intentionally refuses nonempty DBs.

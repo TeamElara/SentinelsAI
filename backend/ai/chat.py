@@ -5,6 +5,8 @@ thing into context. Conversation history is DB-backed so it survives refresh.
 """
 from __future__ import annotations
 
+import asyncio
+
 from ai.client import call_groq, get_api_key
 from ai.prompts import build_chat_messages
 from models import ChatMessage, ScanReport, ChecklistItem
@@ -35,7 +37,7 @@ async def _answer(scan_id, report, checklist, question):
         return None
 
     # Load conversation history as plain dicts for prompt assembly.
-    history = [{"role": m.role, "content": m.content} for m in load_messages(scan_id)]
+    history = [{"role": m.role, "content": m.content} for m in (await asyncio.to_thread(load_messages, scan_id))]
 
     messages = build_chat_messages(report, checklist, history, question)
 
@@ -45,5 +47,5 @@ async def _answer(scan_id, report, checklist, question):
         return None
 
     # Persist both turns before returning.
-    save_message(scan_id, "user", question)
-    return save_message(scan_id, "assistant", raw)
+    await asyncio.to_thread(save_message, scan_id, "user", question)
+    return await asyncio.to_thread(save_message, scan_id, "assistant", raw)

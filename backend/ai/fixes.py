@@ -41,25 +41,39 @@ async def get_or_generate_fix(
         return await _generate(scan_id, finding_key, finding, regenerate=regenerate, user_id=user_id)
 
 
+def _lookup(scan_id, finding_key, regenerate):
+    conn = get_connection()
+    try:
+        finding_id = get_finding_db_id(conn, scan_id, finding_key)
+        cached = get_cached_fix(conn, finding_id, PROMPT_VERSION) if finding_id is not None and not regenerate else None
+        return finding_id, cached
+    finally:
+        conn.close()
+
+
+def _store(finding_id, suggestion):
+    conn = get_connection()
+    try:
+        save_fix(conn, finding_id, PROMPT_VERSION, DEFAULT_MODEL, suggestion)
+    finally:
+        conn.close()
+
+
 async def _generate(scan_id, finding_key, finding, *, regenerate, user_id):
     """Return a cached fix or generate a new one.
 
     Returns None when no GROQ_API_KEY is set — callers return a clean
     "unavailable" JSON response rather than a 500.
     """
-    conn = get_connection()
+    # Do not hold a scarce connection lease while waiting for AI or quota.
+    finding_id, cached = await asyncio.to_thread(_lookup, scan_id, finding_key, regenerate)
+    if finding_id is None:
+        return None
+    if cached is not None:
+        return cached
     reservation = None
     succeeded = False
     try:
-        finding_id = get_finding_db_id(conn, scan_id, finding_key)
-        if finding_id is None:
-            return None
-
-        if not regenerate:
-            cached = get_cached_fix(conn, finding_id, PROMPT_VERSION)
-            if cached is not None:
-                return cached
-
         if not get_api_key():
             return None
         if user_id is not None:
@@ -96,10 +110,9 @@ async def _generate(scan_id, finding_key, finding, *, regenerate, user_id):
             )
         except (KeyError, TypeError, ValidationError):
             return None
-        save_fix(conn, finding_id, PROMPT_VERSION, DEFAULT_MODEL, suggestion)
+        await asyncio.to_thread(_store, finding_id, suggestion)
         succeeded = True
         return suggestion
     finally:
-        conn.close()
         if reservation is not None:
             await asyncio.shield(asyncio.to_thread(reservation.complete if succeeded else reservation.refund))

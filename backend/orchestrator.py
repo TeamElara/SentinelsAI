@@ -169,7 +169,7 @@ async def _finalize(
         checklist=checklist,
         subdomains=subdomains or [],
     )
-    save_scan(report, user_id=user_id)
+    await asyncio.to_thread(save_scan, report, user_id=user_id)
     return report
 
 

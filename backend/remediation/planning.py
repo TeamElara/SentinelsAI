@@ -5,6 +5,8 @@ share logic -- mirrors `ai/fixes.py`'s role for the AI-suggestion endpoint.
 """
 from __future__ import annotations
 
+import asyncio
+
 import io
 import zipfile
 
@@ -33,7 +35,7 @@ def _finding(report: ScanReport, finding_key: str) -> Finding | None:
 
 async def _file_source(report: ScanReport, client: httpx.AsyncClient) -> FileSource:
     try:
-        owner, repo, ref = repo_target(report)
+        owner, repo, ref = await asyncio.to_thread(repo_target, report)
     except NoRepoTarget as exc:
         raise NotARepoScan(str(exc)) from exc
     if ref is None:
@@ -96,7 +98,7 @@ async def plan_and_save(
                 results[finding_key] = None
                 continue
 
-            save_fix_plan(report.id, plan)
+            await asyncio.to_thread(save_fix_plan, report.id, plan)
             results[finding_key] = plan
     return results
 

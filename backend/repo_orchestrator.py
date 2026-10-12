@@ -129,7 +129,7 @@ async def _finalize(
             for rf in repo_files
         ]
 
-    save_scan(report, repo_files=file_entries, user_id=user_id)
+    await asyncio.to_thread(save_scan, report, repo_files=file_entries, user_id=user_id)
     return report
 
 

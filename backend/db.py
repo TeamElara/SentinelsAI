@@ -480,7 +480,8 @@ def get_connection() -> sqlite3.Connection:
                 raise RuntimeError("TURSO_AUTH_TOKEN is required for the remote database.")
             # Connect to the primary directly: no local replica, sync delay or
             # ephemeral disk can weaken quotas, ownership or session revocation.
-            conn = Connection(libsql.connect(url, auth_token=token, timeout=0))
+            from remote_db import connect
+            conn = connect(url, token)
         else:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             # Native busy waits hold the GIL. Let the compatibility adapter
@@ -490,10 +491,13 @@ def get_connection() -> sqlite3.Connection:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+            raise RuntimeError("The database must enforce foreign keys.")
+    except BaseException:
         conn.close()
-        raise RuntimeError("The database must enforce foreign keys.")
+        raise
     return conn
 
 
