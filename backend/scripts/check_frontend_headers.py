@@ -28,14 +28,22 @@ async def check(args):
     result = {'url': base, 'http': [], 'browser': {}, 'status': 'pending'}
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         for path in ('/', '/login', '/url', '/repo', '/settings', '/missing-c11', '/api/missing-c11'):
-            response = await client.get(base + path)
+            try:
+                response = await client.get(base + path)
+            except httpx.RequestError as exc:
+                result['reason'] = f'Application response unavailable at {path}: {type(exc).__name__}. Live checks remain pending.'
+                return result
             if response.is_redirect and urlsplit(response.headers.get('location', '')).hostname == 'vercel.com':
                 result['reason'] = 'Vercel deployment protection returned SSO, not an application response.'
                 return result
             headers = {key: response.headers.get(key, '') for key in HEADER_RULES}
-            assert all(value in headers[key] for key, value in HEADER_RULES.items()), (path, headers)
-            assert "object-src 'none'" in headers['content-security-policy']
             result['http'].append({'path': path, 'status': response.status_code, 'headers': headers})
+            missing = [key for key, value in HEADER_RULES.items() if value not in headers[key]]
+            if "object-src 'none'" not in headers['content-security-policy']:
+                missing.append('content-security-policy: object-src')
+            if missing:
+                result.update(status='failed', reason=f'Required headers missing at {path}: ' + ', '.join(missing))
+                return result
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
@@ -144,7 +152,11 @@ if __name__ == '__main__':
     parser.add_argument('--local-fixtures', action='store_true')
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(check(args))
+    try:
+        result = asyncio.run(check(args))
+    except Exception as exc:
+        result = {'url': args.url.rstrip('/'), 'status': 'failed',
+                  'reason': f'Browser acceptance failed ({type(exc).__name__}); inspect the deployment and browser configuration.'}
     args.output.write_text(json.dumps(result, indent=2), encoding='utf-8')
     print(json.dumps({key:value for key,value in result.items() if key != 'http'}, indent=2))
-    raise SystemExit(0 if result['status'] == 'passed' else 2)
+    raise SystemExit({'passed': 0, 'failed': 1, 'pending': 2}[result['status']])

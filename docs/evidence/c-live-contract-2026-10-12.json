@@ -1,0 +1,72 @@
+{
+  "status": "failed",
+  "checks": [
+    {
+      "surface": "backend",
+      "url": "https://sentinelsai.onrender.com/health",
+      "status": "passed",
+      "http_status": 200,
+      "expected": "200 with status=ok"
+    },
+    {
+      "surface": "backend",
+      "url": "https://sentinelsai.onrender.com/auth/me",
+      "status": "passed",
+      "http_status": 401,
+      "expected": "401 without a session"
+    },
+    {
+      "surface": "backend",
+      "url": "https://sentinelsai.onrender.com/usage",
+      "status": "failed",
+      "http_status": 404,
+      "expected": "401 without a session"
+    },
+    {
+      "surface": "backend",
+      "url": "https://sentinelsai.onrender.com/export/formats",
+      "status": "failed",
+      "http_status": 200,
+      "formats": [
+        "pdf",
+        "json",
+        "markdown"
+      ],
+      "expected": "JSON and Markdown; PDF disabled"
+    },
+    {
+      "surface": "frontend_proxy",
+      "url": "https://sentinels-ai-sage.vercel.app/api/health",
+      "status": "passed",
+      "http_status": 200,
+      "expected": "200 with status=ok"
+    },
+    {
+      "surface": "frontend_proxy",
+      "url": "https://sentinels-ai-sage.vercel.app/api/auth/me",
+      "status": "passed",
+      "http_status": 401,
+      "expected": "401 without a session"
+    },
+    {
+      "surface": "frontend_proxy",
+      "url": "https://sentinels-ai-sage.vercel.app/api/usage",
+      "status": "failed",
+      "http_status": 404,
+      "expected": "401 without a session"
+    },
+    {
+      "surface": "frontend_proxy",
+      "url": "https://sentinels-ai-sage.vercel.app/api/export/formats",
+      "status": "failed",
+      "http_status": 200,
+      "formats": [
+        "pdf",
+        "json",
+        "markdown"
+      ],
+      "expected": "JSON and Markdown; PDF disabled"
+    }
+  ],
+  "scope": "Anonymous HTTP contract only; authenticated flows, remote DB and restart durability still need separate evidence."
+}

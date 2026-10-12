@@ -1,0 +1,44 @@
+{
+  "observed_date": "2026-10-12",
+  "project": "sentinels-ai",
+  "project_id": "prj_scnikUzr2x6iv3l9L0TFnIcTQx23",
+  "account_id": "team_CKutnot1Drilmjn4H98VA9Id",
+  "framework": "nextjs",
+  "node_version": "24.x",
+  "public_domain": "sentinels-ai-sage.vercel.app",
+  "production_deployment": {
+    "id": "dpl_HYGP4YZZkMXrME9Cxw4wqvutnDzx",
+    "url": "sentinels-hwswagstb-elara17.vercel.app",
+    "state": "READY",
+    "target": "production",
+    "branch": "main",
+    "commit": "74e8efb0a51d0d76d8dd1141ccd5f49a2d6a0aa2",
+    "alias_verified": "sentinels-ai-sage.vercel.app"
+  },
+  "pr_43_preview_observed": {
+    "id": "dpl_DD1q4khMDWyJiczyzj25dGUS2ywV",
+    "url": "sentinels-cxi0tz153-elara17.vercel.app",
+    "state": "READY",
+    "branch": "codex/c-live-acceptance",
+    "commit": "8faeeb4199c4f5ca04c29103f248313e1c2c1e06"
+  },
+  "public_api_setting": {
+    "key": "NEXT_PUBLIC_API_BASE",
+    "origin": "https://sentinelsai.onrender.com",
+    "targets": ["preview", "production"],
+    "matches_audited_render_service": true
+  },
+  "access": {
+    "default_connected_scope_project_and_deployment_reads": "passed",
+    "explicit_elara17_scope_project_read": "403 forbidden",
+    "explicit_account_id_scope_project_read": "403 forbidden",
+    "authenticated_protected_deployment_fetch": "403 forbidden at read_protection_bypass",
+    "public_domain_browser_and_header_checks": "passed; see c11-public-2026-10-12.json"
+  },
+  "remaining": [
+    "Protected deployment fetch permission is unavailable through this connection.",
+    "Remote Turso configuration/recovery and current Render deployment remain unverified or incomplete.",
+    "Authenticated scan/report flow and actual restart/cold-start evidence remain pending."
+  ],
+  "provider_configuration_changed": false
+}

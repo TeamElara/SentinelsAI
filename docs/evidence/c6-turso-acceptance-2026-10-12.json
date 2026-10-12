@@ -1,0 +1,6 @@
+{
+  "status": "pending",
+  "mode": "remote",
+  "writes": false,
+  "reason": "Remote acceptance needs TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in this process environment."
+}
