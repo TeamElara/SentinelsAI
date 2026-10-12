@@ -411,6 +411,24 @@ CREATE TABLE usage_carryover (
 );
 """
 
+# Domain verification (Launch Plan gate 6): a person proves they control a
+# host before Sentinels scans it. One row per person and host; `token` is what
+# they publish, `verified_at`/`method` say whether and how it was proven, and
+# `last_checked_at` spaces out checks, each of which reaches the person's host.
+_V20_SCHEMA = """
+CREATE TABLE domain_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    host TEXT NOT NULL,
+    token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_checked_at TEXT,
+    verified_at TEXT,
+    method TEXT CHECK(method IN ('dns', 'file')),
+    UNIQUE(user_id, host)
+);
+"""
+
 # Version 15 is reserved for Track A's users.blocked migration. The ledger
 # below records individual versions so a later integration of 15 is not lost.
 MIGRATIONS: list[tuple[int, str]] = [
@@ -433,6 +451,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (17, _V17_SCHEMA),
     (18, _V18_SCHEMA),
     (19, _V19_SCHEMA),
+    (20, _V20_SCHEMA),
 ]
 
 

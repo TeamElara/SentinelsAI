@@ -50,6 +50,7 @@ def test_migration_15_can_land_after_16_to_18(tmp_path, monkeypatch):
 
 
 def test_failed_migration_rolls_back_schema_and_ledger(temp_db, monkeypatch):
+    latest = db.MIGRATIONS[-1][0]
     monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, (99,
         "ALTER TABLE users ADD COLUMN rolled_back INTEGER;\nINVALID SQL;\n")])
     with pytest.raises(Exception):
@@ -57,5 +58,5 @@ def test_failed_migration_rolls_back_schema_and_ledger(temp_db, monkeypatch):
     conn = db.get_connection()
     assert "rolled_back" not in [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
     assert conn.execute("SELECT version FROM schema_migrations WHERE version=99").fetchone() is None
-    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 19
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == latest
     conn.close()

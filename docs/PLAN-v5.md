@@ -1244,7 +1244,7 @@ suite on `main` is 1006 tests, all passing.
 | 3. Durable storage & resource limits | B4, B5, C6–C8, C10 | Done in code: deadlines and cleanup, tarball streaming, libSQL driver + backup/restore tooling, durable quotas, AI-failure regressions, prompt split. **Remote Turso acceptance and a Render redeploy are not yet run.** |
 | 4. Validated optional features | A8, B6 | Webhook and PDF sandbox are in code. PDF stays off on Render until Chromium's memory is measured. Only `repo-config` has a recorded apply→merge→verify cycle (Stage J); other fixers stay preview-only until each has one. |
 | 5. Restricted beta | A5, A6, C5, C9, C11 | Switches, onboarding confirmation, cold-start screen and security headers are in code. Live checks are open (below). |
-| 6. Widen access | A7 | Delete-my-account is in code. Domain verification is not built; it must exist before open sign-ups. |
+| 6. Widen access | A7 | Delete-my-account and domain verification are in code. Verification is off unless `SENTINELS_REQUIRE_DOMAIN_VERIFICATION=1`; it must be on before open sign-ups. |
 
 ### What only a person with the dashboards can close
 

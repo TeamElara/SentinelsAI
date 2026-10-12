@@ -32,7 +32,8 @@ const SECTIONS: LegalSection[] = [
       "Fixes: the changes Sentinels proposed (which can include the text of the files it would change), whether a pull request was opened, its number and link, and its status.",
       "Connected repositories: if you install the Sentinels GitHub App, the installation number, the account it covers, whether it covers all or selected repositories, and the permissions granted.",
       "Your daily usage: how many scans, verifications, PDF exports, AI fixes and chat questions you used today, and the scan jobs behind them (the address and whether the job finished), so the daily allowances can be enforced and a scan can be resumed if your connection drops.",
-      "A record of actions: when you confirm you may test a website (with the address), and when a pull request is opened for you, with the time. This record exists so that what Sentinels did on someone's behalf can be accounted for.",
+      "Your domains: the domain names you add under Settings to prove you control them, the random code you were given for each, and whether and how (DNS record or file) it was proven. Checking one asks public DNS for a TXT record and requests one file from that site.",
+      "A record of actions: when you confirm you may test a website (with the address), when you prove control of a domain, and when a pull request is opened for you, with the time. This record exists so that what Sentinels did on someone's behalf can be accounted for.",
     ],
   },
   {

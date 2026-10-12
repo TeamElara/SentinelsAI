@@ -392,6 +392,39 @@ class FixApplication(BaseModel):
     updated_at: str
 
 
+class DomainClaim(BaseModel):
+    """A host someone is proving, or has proven, they control (`domains.py`).
+
+    Carries both ways of proving it, ready to copy: the TXT record's name and
+    value, and the file's address and contents.
+    """
+
+    host: str
+    created_at: str
+    verified_at: Optional[str] = None
+    method: Optional[Literal["dns", "file"]] = None
+    dns_name: str
+    dns_value: str
+    file_url: str
+    file_contents: str
+
+
+class DomainList(BaseModel):
+    """`GET /domains`: whether this deployment requires a verified host before a
+    website scan, and the caller's claims."""
+
+    required: bool
+    domains: list[DomainClaim]
+
+
+class DomainCheckResult(BaseModel):
+    """`POST /domains/{host}/check`: the claim afterwards, and when it still
+    isn't verified, what each way of proving it found."""
+
+    domain: DomainClaim
+    problems: list[str] = Field(default_factory=list)
+
+
 class GitHubInstallation(BaseModel):
     """One repository-write grant: this user installed the Sentinels GitHub
     App on this GitHub account (PLAN-v5 Stage B).

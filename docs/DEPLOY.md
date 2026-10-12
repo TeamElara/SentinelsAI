@@ -111,6 +111,17 @@ remote Turso or Render restart/redeploy gates.
   through a real preview → apply → merge → verify cycle). To stop one account,
   from a Render shell in `backend/`:
   `python -c "from storage.users import set_blocked; print(set_blocked('login', True))"`.
+- Domain verification: `SENTINELS_REQUIRE_DOMAIN_VERIFICATION=1` makes a
+  website scan need a domain the person has proven they control, from
+  Settings → Your domains: a TXT record at `_sentinels.<domain>` (covers the
+  domain and every name under it) or a file at
+  `https://<domain>/.well-known/sentinels-verification.txt` (that host only, no
+  redirect). Repository scans aren't affected. Leave it off for the invite-only
+  beta if you like; **turn it on before sign-ups open to people you don't know**.
+  The file check sends one request to the person's site through the same
+  outbound policy as a scan, is limited to one every 10 seconds per domain,
+  and is paused by `SENTINELS_SCANS_PAUSED`. A proof is checked once and kept
+  until the person removes the domain; it isn't re-checked later.
 - The emergency switches are `SENTINELS_SCANS_PAUSED=1` (no new scans or
   re-verifications) and `SENTINELS_WRITES_PAUSED=1` (no new pull requests;
   previews still work). Render restarts the service when an environment

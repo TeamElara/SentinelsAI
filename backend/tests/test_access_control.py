@@ -59,6 +59,10 @@ SIGNED_IN = {
     ("GET", "/scan/stream"),
     ("GET", "/repo/stream"),
     ("GET", "/scans"),
+    ("GET", "/domains"),
+    ("POST", "/domains"),
+    ("POST", "/domains/{host}/check"),
+    ("DELETE", "/domains/{host}"),
 }
 
 # Values for path parameters other than `scan_id`. `format_id` has to be a
@@ -70,6 +74,7 @@ PARAM_VALUES = {
     "finding_key": "missing-csp",
     "format_id": "json",
     "installation_id": "1",
+    "host": "example.com",
 }
 
 # Request bodies for the scan routes that validate one. Validation runs before
