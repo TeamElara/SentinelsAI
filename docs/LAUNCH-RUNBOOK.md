@@ -116,14 +116,20 @@ the production domain first.)
 ## 5. Sentry (optional, but wanted for a beta)
 
 - [ ] Create a project, copy its DSN into `SENTRY_DSN` on Render.
+- [ ] In the Sentry project: *Settings → Security & Privacy*, turn on **Prevent
+      Storing of IP Addresses** and keep **Data Scrubber** on. The privacy page
+      promises the IP isn't stored; browser reports pass through Vercel, which
+      may forward the visitor's IP in a header.
 - [ ] After the deploy, from a Render shell in `backend/`, send one test event:
       `python -c "import observability, sentry_sdk; observability.init_error_tracking(); sentry_sdk.capture_exception(RuntimeError('test https://example.com/path?token=abc')); sentry_sdk.flush()"`
 - [ ] Open the event in Sentry. **It must not contain** the address, the
       query string, a header, a cookie or an IP. The message should read
       `test <url>`. If anything else shows, stop and report it.
 
-Browser-side Sentry doesn't exist yet; frontend errors only reach the browser
-console and Vercel's logs.
+- [ ] Browser errors (optional): set `NEXT_PUBLIC_SENTRY_DSN` on Vercel to the
+      same DSN and redeploy (it's read at build time). Then in the browser
+      console on `<web>` run `setTimeout(() => { throw new Error('test https://example.com/x?token=abc') })`
+      and check the event the same way: the message should read `test <url>`.
 
 ## 6. Smoke test: run after the first deploy and after every deploy
 

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 
 import { ISSUES_URL } from "@/lib/links";
+import { reportError } from "@/lib/report-error";
 
 /* Shown when something throws while a page renders. In production Next hides
    the real message from the browser (it may hold details that shouldn't leave
@@ -20,6 +21,7 @@ export default function ErrorPage({
 }) {
   useEffect(() => {
     console.error(error);
+    reportError(error);
   }, [error]);
 
   return (
