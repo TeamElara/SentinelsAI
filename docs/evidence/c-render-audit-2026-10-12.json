@@ -1,0 +1,29 @@
+{
+  "observed_date": "2026-10-12",
+  "service": "SentinelsAI",
+  "service_id": "srv-dan6cj942hec73dcukp0",
+  "url": "https://sentinelsai.onrender.com",
+  "repository": "https://github.com/TeamElara/SentinelsAI",
+  "branch": "main",
+  "root_directory": "backend",
+  "runtime": "python",
+  "python_version": "not verified",
+  "plan": "free",
+  "instances": 1,
+  "start_command": "uvicorn main:app --host 0.0.0.0 --port $PORT",
+  "build_command": "pip install -r requirements.txt",
+  "auto_deploy_setting": "yes",
+  "live_deployment": {
+    "id": "dep-dan8k4jm8hqs73aen10g",
+    "status": "live",
+    "commit": "c79c2851acf9e8b9347dad1c158718e90e719a29",
+    "finished_at": "2026-09-19T13:12:46.868006Z",
+    "trigger": "manual"
+  },
+  "audited_main": "74e8efb0a51d0d76d8dd1141ccd5f49a2d6a0aa2",
+  "status": "failed",
+  "reason": "Live Render deployment predates the merged launch integration. Auto-deploy being enabled did not establish that current main is deployed.",
+  "database_configuration": "not verified; connected Render tools do not expose environment reads or a service shell",
+  "vercel_project_access": "403 for elara17/sentinels-ai; public application checks are separately recorded",
+  "changes_applied": false
+}

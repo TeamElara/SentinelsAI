@@ -15,11 +15,13 @@ security integration, persistent quotas and live database/recovery evidence.
 
 **Configuration to verify in the existing dashboards:** Vercel root
 `frontend`, Node 24, NEXT_PUBLIC_API_BASE set to the Render HTTPS origin.
-Render root `backend`, Python 3.13, install requirements and Chromium dependencies,
+Render root `backend`, Python 3.13, install requirements,
 start `uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1`, and set
 TURSO_DATABASE_URL/TURSO_AUTH_TOKEN plus the existing session/GitHub secrets.
 Keep secrets server-side. Existing OAuth callback and frontend origin must
-continue to match the deployed URLs.
+continue to match the deployed URLs. Leave `SENTINELS_PDF_ENABLED` unset/off:
+Chromium and its system dependencies are required only for an explicitly enabled
+PDF deployment after its resource checks pass. See [deployment settings](DEPLOY.md).
 
 **Access boundary:** no Turso, Render or Vercel CLI credentials and no matching
 GitHub repository secrets are available in this workspace. Successful Vercel
