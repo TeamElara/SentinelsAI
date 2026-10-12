@@ -164,10 +164,18 @@ mind changing.
 
 ## 8. Backup before you widen access
 
-- [ ] `cd backend && python scripts/database_backup.py export /safe/place/backup.json`
+- [ ] `cd backend && python scripts/database_backup.py export /safe/place/backup.db`
       (with the Turso variables in your environment). Restore only works into an
       **empty** database: try it once against a scratch Turso database so you
       know it works before you need it.
+
+The logical export above is a plaintext SQLite file. For production backup
+storage and the encrypted weekly workflow, follow
+[`TRACK-C-OPERATIONS.md`](TRACK-C-OPERATIONS.md#weekly-encrypted-production-backups).
+The workflow remains disabled until production secrets and a recovery key are
+configured; verify a real export and scratch-database restore before counting
+backups as operational. Complete the idle-wake smoke test before enabling the
+5-minute uptime monitor, which otherwise keeps Render awake.
 
 ## 9. Rollback
 

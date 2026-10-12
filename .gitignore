@@ -12,6 +12,11 @@ __pycache__/
 
 # SQLite data — local persistence, not shared via git
 backend/data/
+# Recovery material belongs in private storage, never the source checkout.
+*.sbk
+*.db
+*.sqlite
+*.sqlite3
 
 # Node / Next.js
 node_modules/
