@@ -480,7 +480,7 @@ def get_connection() -> sqlite3.Connection:
                 raise RuntimeError("TURSO_AUTH_TOKEN is required for the remote database.")
             # Connect to the primary directly: no local replica, sync delay or
             # ephemeral disk can weaken quotas, ownership or session revocation.
-            conn = Connection(libsql.connect(url, auth_token=token, timeout=0))
+            conn = Connection(libsql.connect(url, auth_token=token, timeout=0), serialize_writes=True)
         else:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             # Native busy waits hold the GIL. Let the compatibility adapter

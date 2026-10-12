@@ -6,11 +6,35 @@ rows, constraint exceptions and transaction behavior explicitly.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
+import threading
 import time
 import libsql
 
 _BUSY_RETRY_SECONDS = 5.0
+
+# One write transaction at a time per process, on a remote database.
+#
+# Turso serves a write transaction from a server-side stream. If a second
+# connection starts one while the first is open, the server makes the second
+# wait, and the driver does that wait inside a native call that keeps Python's
+# GIL: the first transaction's thread can't run to commit. Measured against
+# Turso (PR notes): the second BEGIN stalled
+# the whole process for ~10 s, then the server rolled the first transaction back
+# as "idle for too long". Every concurrent quota reservation failed that way.
+#
+# Waiting on a Python lock releases the GIL, so the thread that owns the
+# transaction finishes it and the next one starts when it's done. The service
+# runs one worker (see DEPLOY.md), so a process-wide lock covers every writer.
+# Reentrant, so a thread that already holds it and opens a second connection is
+# no worse off than before; bounded, so a stuck holder surfaces as an error
+# rather than a hang.
+_WRITE_LOCK = threading.RLock()
+_WRITE_LOCK_WAIT_SECONDS = 30.0
+
+_READ_ONLY_STATEMENT = re.compile(r"\s*(select|pragma|explain)\b", re.IGNORECASE)
+_PLAIN_BEGIN = re.compile(r"\s*begin(\s+deferred)?(\s+transaction)?\s*;?\s*$", re.IGNORECASE)
 
 
 class NamedRow(tuple):
@@ -94,20 +118,52 @@ class Cursor:
 
 
 class Connection:
-    def __init__(self, raw):
+    def __init__(self, raw, *, serialize_writes=False):
         self.raw = raw
+        self._serialize_writes = serialize_writes
+        self._holds_write_lock = False
+
+    def _acquire_write_lock(self, sql):
+        """Take the process-wide write lock before the first statement that can
+        write, and keep it until this connection commits, rolls back or closes."""
+        if not self._serialize_writes or self._holds_write_lock:
+            return
+        if _READ_ONLY_STATEMENT.match(sql) or _PLAIN_BEGIN.match(sql):
+            return
+        if not _WRITE_LOCK.acquire(timeout=_WRITE_LOCK_WAIT_SECONDS):
+            raise sqlite3.OperationalError("database is locked")
+        self._holds_write_lock = True
+
+    def _release_write_lock(self):
+        if self._holds_write_lock:
+            self._holds_write_lock = False
+            _WRITE_LOCK.release()
 
     @property
     def in_transaction(self):
         return self.raw.in_transaction
 
     def execute(self, sql, parameters=()):
-        return Cursor(_call(self.raw.execute, sql, tuple(parameters)))
+        self._acquire_write_lock(sql)
+        try:
+            return Cursor(_call(self.raw.execute, sql, tuple(parameters)))
+        except BaseException:
+            # A failed statement outside a transaction leaves nothing to commit
+            # or roll back, so nothing would release the lock.
+            if self._holds_write_lock and not self.raw.in_transaction:
+                self._release_write_lock()
+            raise
 
     def executemany(self, sql, parameters):
         # A batch can have partially run before failing. Its caller must roll
         # back the transaction; never replay the whole batch automatically.
-        return Cursor(_call(self.raw.executemany, sql, [tuple(p) for p in parameters], retry_locked=False))
+        self._acquire_write_lock(sql)
+        try:
+            return Cursor(_call(self.raw.executemany, sql, [tuple(p) for p in parameters], retry_locked=False))
+        except BaseException:
+            if self._holds_write_lock and not self.raw.in_transaction:
+                self._release_write_lock()
+            raise
 
     def executescript(self, script):
         # Use SQLite's statement parser rather than split(';'): literals and
@@ -123,16 +179,23 @@ class Connection:
             self.execute(statement)
 
     def commit(self):
-        return _call(self.raw.commit)
+        try:
+            return _call(self.raw.commit)
+        finally:
+            self._release_write_lock()
 
     def rollback(self):
-        return _call(self.raw.rollback)
+        try:
+            return _call(self.raw.rollback)
+        finally:
+            self._release_write_lock()
 
     def close(self):
         # Match sqlite3: closing an uncommitted connection discards its writes.
         try:
             self.rollback()
         finally:
+            self._release_write_lock()
             self.raw.close()
 
     def __enter__(self):
