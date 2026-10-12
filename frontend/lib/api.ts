@@ -586,6 +586,72 @@ export async function revokeInstallation(installationId: number): Promise<void> 
   if (!res.ok) await raiseApiError(res, `Couldn't disconnect (${res.status})`);
 }
 
+/* ---------------------------------------------------------------------------
+   Domain verification (Launch Plan gate 6): proving control of a host before
+   scanning it. Whether a deployment requires it comes back with the list.
+   --------------------------------------------------------------------------- */
+
+export interface DomainClaim {
+  host: string;
+  created_at: string;
+  verified_at: string | null;
+  method: "dns" | "file" | null;
+  dns_name: string;
+  dns_value: string;
+  file_url: string;
+  file_contents: string;
+}
+
+export interface DomainList {
+  required: boolean;
+  domains: DomainClaim[];
+}
+
+export interface DomainCheckResult {
+  domain: DomainClaim;
+  problems: string[];
+}
+
+export async function fetchDomains(): Promise<DomainList> {
+  const res = await fetch(`${API_BASE}/domains`, withAuth());
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't load your domains (${res.status})`);
+  return res.json() as Promise<DomainList>;
+}
+
+export async function addDomain(host: string): Promise<DomainClaim> {
+  const res = await fetch(
+    `${API_BASE}/domains`,
+    withAuth({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host }),
+    }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't add that domain (${res.status})`);
+  return res.json() as Promise<DomainClaim>;
+}
+
+export async function checkDomain(host: string): Promise<DomainCheckResult> {
+  const res = await fetch(
+    `${API_BASE}/domains/${encodeURIComponent(host)}/check`,
+    withAuth({ method: "POST" }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't check that domain (${res.status})`);
+  return res.json() as Promise<DomainCheckResult>;
+}
+
+export async function removeDomain(host: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/domains/${encodeURIComponent(host)}`,
+    withAuth({ method: "DELETE" }),
+  );
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't remove that domain (${res.status})`);
+}
+
 /** Delete the signed-in account and everything it owns. `confirmLogin` has to
  *  be the account's own GitHub login — the backend refuses anything else. */
 export async function deleteAccount(confirmLogin: string): Promise<void> {

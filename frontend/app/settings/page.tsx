@@ -23,6 +23,7 @@ import {
   type GitHubInstallation,
 } from "@/lib/api";
 import { GettingStarted } from "@/components/onboarding/GettingStarted";
+import { DomainsPanel } from "@/components/settings/DomainsPanel";
 import { useSession } from "@/lib/useSession";
 
 const INSTALL_ERRORS: Record<string, string> = {
@@ -302,13 +303,15 @@ export default function SettingsPage() {
         </p>
       </section>
 
+      {user && <DomainsPanel />}
+
       <section className="mt-20 border-t border-rule pt-10">
         <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
           Delete account
         </h2>
         <p className="mt-5 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
-          This deletes your scans and reports, findings, chat history, planned fixes, and
-          your connected-repository records. It can&apos;t be undone. A short record that a
+          This deletes your scans and reports, findings, chat history, planned fixes, your
+          domains, and your connected-repository records. It can&apos;t be undone. A short record that a
           scan or a pull request happened is kept without your name on it. Pull requests
           already opened stay on GitHub, and you remove the Sentinels App from your GitHub
           settings yourself.

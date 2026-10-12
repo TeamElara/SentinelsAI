@@ -196,6 +196,8 @@ something wrong. Practise this once before inviting anyone.
       (step 12). Today only `repo-config` does.
 - [ ] A week with ~10 invited users and no critical incident; every reported
       false positive reviewed.
-- [ ] Domain verification exists (a DNS record or a file on the site proving the
-      person owns it). It isn't built yet; the permission checkbox only records
-      a claim. It must exist before open sign-ups.
+- [ ] Set `SENTINELS_REQUIRE_DOMAIN_VERIFICATION=1` on Render. Then, signed in:
+      scanning a site you haven't verified answers "Verify that you control …"
+      with a link to Settings; add the domain there, publish the TXT record (or
+      the file), press Check, and the same scan starts. This must be on before
+      open sign-ups.

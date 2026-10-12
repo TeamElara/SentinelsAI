@@ -16,6 +16,7 @@
    `GET /scans/{id}` — hard-refresh works. */
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   streamScan,
@@ -183,6 +184,16 @@ export function ScanLauncher({
             Inspection failed
           </p>
           <p className="mt-2 text-sm text-muted">{error}</p>
+          {/* The backend's refusal for an unproven host names Settings; this
+              takes the person straight to the place to prove it. */}
+          {error.startsWith("Verify that you control") && (
+            <Link
+              href="/settings#domains"
+              className="mt-3 inline-block font-mono text-[10px] uppercase tracking-[0.2em] text-parchment underline decoration-rule"
+            >
+              Verify a domain →
+            </Link>
+          )}
         </div>
       )}
 

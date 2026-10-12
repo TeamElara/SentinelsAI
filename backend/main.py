@@ -77,7 +77,8 @@ from auth.session import (  # noqa: E402
     token_from_cookie,
 )
 from db import init_db  # noqa: E402
-from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
+import domains  # noqa: E402
+from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, DomainCheckResult, DomainClaim, DomainList, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
 from observability import init_error_tracking  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from usage import has_reservation  # noqa: E402
@@ -93,6 +94,7 @@ from repo_orchestrator import run_repo_scan, run_repo_scan_stream  # noqa: E402
 from report.registry import get_exporter, list_formats  # noqa: E402
 from storage.account import delete_account  # noqa: E402
 from storage.chat import load_messages  # noqa: E402
+from storage import domains as domain_claims  # noqa: E402
 from storage.fixes import load_fixes_for_scan  # noqa: E402
 from storage.installations import (  # noqa: E402
     InstallationOwnedByAnotherUser,
@@ -666,6 +668,89 @@ def require_permission(confirmed: bool, user: User, url: str, *, record: bool = 
         write_audit(user.id, None, None, "scan_permission_confirmed", url)
 
 
+def require_verified_domain(user: User, url: str) -> None:
+    """With `SENTINELS_REQUIRE_DOMAIN_VERIFICATION` on, a website scan needs a
+    host the caller has proven they control (`domains.py`). The checkbox above
+    is a statement; this is the proof, for when strangers can sign up."""
+    if not domains.required():
+        return
+    try:
+        host = domains.host_of(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not domain_claims.is_verified(user.id, host):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Verify that you control {host} before scanning it: Settings, then Your domains.",
+        )
+
+
+class AddDomainRequest(BaseModel):
+    host: str = Field(max_length=300)
+
+
+def _owned_claim(user: User, host: str) -> DomainClaim:
+    """The caller's claim on `host`, or the same 404 whether nobody claimed it
+    or someone else did."""
+    claim = domain_claims.get_claim(user.id, host.strip().lower().rstrip("."))
+    if claim is None:
+        raise HTTPException(status_code=404, detail="You haven't added that domain.")
+    return claim
+
+
+@app.get("/domains", response_model=DomainList)
+def domains_list(user: User = Depends(current_user)) -> DomainList:
+    return DomainList(required=domains.required(), domains=domain_claims.list_claims(user.id))
+
+
+@app.post("/domains", response_model=DomainClaim)
+def domains_add(body: AddDomainRequest, user: User = Depends(current_user)) -> DomainClaim:
+    try:
+        host = domains.claimable_host(body.host)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return domain_claims.add_claim(user.id, host)
+    except domain_claims.TooManyClaims:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You can add up to {domains.MAX_CLAIMS_PER_USER} domains. Remove one first.",
+        ) from None
+
+
+@app.post(
+    "/domains/{host}/check",
+    response_model=DomainCheckResult,
+    dependencies=[Depends(require_scans_running)],
+)
+async def domains_check(host: str, user: User = Depends(current_user)) -> DomainCheckResult:
+    """Look for the TXT record, then the file. The file check sends one request
+    to the person's host, so checks are spaced out and paused with scans."""
+    claim = await asyncio.to_thread(_owned_claim, user, host)
+    if claim.verified_at is not None:
+        return DomainCheckResult(domain=claim)
+    try:
+        await asyncio.to_thread(domain_claims.start_check, user.id, claim.host)
+    except domain_claims.CheckedTooRecently:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Wait {domains.CHECK_COOLDOWN_SECONDS} seconds between checks.",
+        ) from None
+    method, problems = await domains.prove(claim.host, claim.file_contents)
+    if method is None:
+        return DomainCheckResult(domain=claim, problems=problems)
+    await asyncio.to_thread(domain_claims.mark_verified, user.id, claim.host, method)
+    await asyncio.to_thread(write_audit, user.id, None, None, "domain_verified", f"{claim.host} ({method})")
+    return DomainCheckResult(domain=await asyncio.to_thread(_owned_claim, user, claim.host))
+
+
+@app.delete("/domains/{host}")
+def domains_delete(host: str, user: User = Depends(current_user)) -> Response:
+    claim = _owned_claim(user, host)
+    domain_claims.delete_claim(user.id, claim.host)
+    return Response(status_code=204)
+
+
 @app.post("/scan", response_model=ScanReport, dependencies=[Depends(require_scans_running)])
 async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> ScanReport:
     """Run a full scan against `request.url` and return the report.
@@ -675,6 +760,7 @@ async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> S
     the agents it calls.
     """
     require_permission(request.permission_confirmed, user, request.url)
+    require_verified_domain(user, request.url)
     try:
         return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
     except ValueError as exc:
@@ -767,6 +853,7 @@ async def scan_stream(
     reject_cross_site_scan_start(request)
     reconnect = await asyncio.to_thread(has_reservation, user.id, 'url_scan', request_id)
     require_permission(permission_confirmed, user, url, record=not reconnect)
+    require_verified_domain(user, url)
 
     async def events():
         async with _closing(run_scan_stream(url, user_id=user.id)) as stream:

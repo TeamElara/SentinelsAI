@@ -4,8 +4,9 @@ What "delete my account" means, so it can be stated in the privacy notice and
 tested:
 
 **Deleted, in one transaction**
-* the user row, and with it their sessions, their GitHub installation records
-  and their scan-to-repository links (cascading foreign keys);
+* the user row, and with it their sessions, their GitHub installation records,
+  their scan-to-repository links and their domain claims (cascading foreign
+  keys);
 * every scan they own, and with it everything hanging off a scan: agent runs,
   findings and evidence, checklist answers, AI fix suggestions, chat messages,
   repository file listings, discovered subdomains, fix plans and fix
