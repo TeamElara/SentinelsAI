@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { ISSUES_URL } from "@/lib/links";
+
 /* The shared frame for /terms and /privacy: a plain reading column with the
    same type roles as the rest of the site, no animation and no client code,
    so both pages are static and readable with scripts off.
@@ -15,8 +17,6 @@ export type LegalSection = {
   /** A bulleted list under the paragraphs. */
   items?: string[];
 };
-
-export const ISSUES_URL = "https://github.com/TeamElara/SentinelsAI/issues";
 
 export function LegalPage({
   title,
