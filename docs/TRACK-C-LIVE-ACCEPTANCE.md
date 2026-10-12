@@ -5,8 +5,9 @@ adds repeatable C6/C7 database acceptance and records the remaining live gates.
 The audited main revision is `74e8efb0a51d0d76d8dd1141ccd5f49a2d6a0aa2`.
 No provider settings, production rows or teammate branches were changed.
 
-Validation: the existing 1,006 backend tests passed on Python 3.13 under both
-SQLite and libSQL. All nine new acceptance-command tests passed. Frontend tests
+Validation: the updated 1,015 backend tests passed in GitHub CI on Python 3.13
+under both SQLite and libSQL, including all nine new acceptance-command tests.
+Both push and PR CI runs succeeded; PR run: `38203653945`. Frontend tests
 (8), production build and lint passed on Node 24; lint retained two existing
 navigation warnings. Both production dependency audits (`pip-audit` and
 `npm audit --omit=dev`) reported zero known vulnerabilities. The full npm audit
@@ -103,6 +104,7 @@ deployment. A healthy old backend cannot pass just because `/health` returns 200
 | Temporary SQLite acceptance | Passed; [report](evidence/c6-sqlite-acceptance-2026-10-12.json). |
 | Temporary libSQL acceptance | Passed; [report](evidence/c6-libsql-acceptance-2026-10-12.json). |
 | Remote Turso | Pending credentials; [report](evidence/c6-turso-acceptance-2026-10-12.json). |
+| Vercel runtime/configuration | Node 24.x verified; preview and production API base both match the audited Render service. Production alias and main commit verified; [metadata audit](evidence/c-vercel-audit-2026-10-12.json). |
 | Main's Vercel deployment | Pending: deployment protection redirects to SSO; [report](evidence/c11-production-2026-10-12.json). |
 | Public Vercel domain, C11 | Passed all seven HTTP paths and browser login/CSP/framing/referrer checks on retry; [report](evidence/c11-public-2026-10-12.json). Initial request timed out. |
 | Render revision | Failed: live deployment is still September 19 commit `c79c285`, not audited main; [service audit](evidence/c-render-audit-2026-10-12.json). |
@@ -112,6 +114,11 @@ deployment. A healthy old backend cannot pass just because `/health` returns 200
 
 Main's deployment URL comes from GitHub deployment `6950930403`; the public
 domain comes from the repository's `homepage`, not an assumed host name.
+After the Vercel connection was confirmed, API metadata independently verified
+that domain is an alias of production deployment `dpl_HYGP4YZZkMXrME9Cxw4wqvutnDzx`
+at the audited main commit. PR #43's observed READY preview is recorded by commit
+in the metadata audit. This verifies the intended frontend revision, rather than
+inferring it from a healthy page. No protection setting was changed.
 
 **Current deployment mismatch:** the connected Render account confirmed service
 `SentinelsAI`, root `backend`, one instance and the expected build/start commands.
@@ -136,7 +143,9 @@ Public C11 header/browser checks are complete for the recorded domain and date.
 To close C9 and the full live flow, record an idle-service wake-up and an
 authenticated scan/report flow against the updated backend. Render read access
 became available during the audit; its available tools do not provide environment
-reads, service-shell execution or database export. Vercel project inspection
-returned 403 for `elara17/sentinels-ai`, and no authenticated Vercel CLI was
-available. Turso credentials were absent. These remaining gates need the matching
-project permissions and a secure backend/Turso session, not another code merge.
+reads, service-shell execution or database export. The confirmed Vercel connection
+can read project/deployment metadata and the public API configuration through its
+default scope. Explicit `elara17`/account scope requests and the authenticated
+protected-deployment fetch still return 403. No authenticated Vercel CLI was
+available. Turso credentials were absent. The remaining access-dependent checks
+need protected-deployment permissions and a secure backend/Turso session.

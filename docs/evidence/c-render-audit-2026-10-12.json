@@ -24,6 +24,6 @@
   "status": "failed",
   "reason": "Live Render deployment predates the merged launch integration. Auto-deploy being enabled did not establish that current main is deployed.",
   "database_configuration": "not verified; connected Render tools do not expose environment reads or a service shell",
-  "vercel_project_access": "403 for elara17/sentinels-ai; public application checks are separately recorded",
+  "vercel_project_access": "Default connected scope now reads project/deployment metadata; explicit elara17/account scope and protected fetch still return 403. See c-vercel-audit-2026-10-12.json.",
   "changes_applied": false
 }
