@@ -549,6 +549,24 @@ export function githubInstallUrl(): string {
   return `${API_BASE}/auth/github/install`;
 }
 
+/** Mirrors backend/models.py `ScanSummary`: a scan without its findings. */
+export interface ScanSummary {
+  id: string;
+  url: string;
+  target_type: TargetType;
+  score: number;
+  grade: string;
+  scanned_at: string;
+}
+
+/** The signed-in user's own scans, newest first. */
+export async function fetchScanSummaries(limit = 100): Promise<ScanSummary[]> {
+  const res = await fetch(`${API_BASE}/scans?limit=${limit}`, withAuth());
+  checkAuth(res);
+  if (!res.ok) await raiseApiError(res, `Couldn't load your scans (${res.status})`);
+  return res.json() as Promise<ScanSummary[]>;
+}
+
 /** The repository-write grants this user currently holds (live and revoked). */
 export async function fetchInstallations(): Promise<GitHubInstallation[]> {
   const res = await fetch(`${API_BASE}/installations`, withAuth());
