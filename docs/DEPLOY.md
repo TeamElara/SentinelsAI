@@ -50,6 +50,7 @@ Vercel → New Project → import this repo → set **Root Directory** to
 | Variable | Value |
 |---|---|
 | `NEXT_PUBLIC_API_BASE` | Your Render backend URL, e.g. `https://sentinels-api.onrender.com` |
+| `NEXT_PUBLIC_SENTRY_DSN` | Optional. The Sentry project's DSN (`https://<key>@<host>/<project-id>`). Unset: browser error reporting is off and none of the SDK is shipped. Set: crashes in the browser are reported through this site's own `/monitoring` path, with scan addresses, findings, tokens and ids removed (`frontend/lib/sentry-scrub.ts`). It is inlined at build time, so changing it needs a redeploy. Optional `NEXT_PUBLIC_SENTRY_ENVIRONMENT` (default `production`). |
 
 ## 3. After both are live
 

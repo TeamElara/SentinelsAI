@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { sentryEnvelopeUrl } from "./lib/sentry-tunnel";
+
 /* Security headers for every response this frontend serves (Launch Plan C11).
 
    Check deployed response headers and browser behavior directly; a scanner
@@ -69,6 +71,15 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  env: {
+    // Next only inlines a NEXT_PUBLIC_ variable that is set. Naming it here
+    // makes an unset DSN the constant "", so `if (process.env.NEXT_PUBLIC_SENTRY_DSN)`
+    // is removed at build time and a deploy without a DSN ships none of the SDK.
+    NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN ?? "",
+    // The deployed commit, read by the browser SDK as its release. Vercel sets
+    // VERCEL_GIT_COMMIT_SHA at build time; it is not a secret.
+    NEXT_PUBLIC_RELEASE: process.env.VERCEL_GIT_COMMIT_SHA ?? "",
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
@@ -79,14 +90,20 @@ const nextConfig: NextConfig = {
     // browser only ever talks to this same origin, and Next's server relays
     // the request (cookies included) to Render behind the scenes.
     const backendOrigin = process.env.NEXT_PUBLIC_API_BASE;
-    if (!backendOrigin || backendOrigin.startsWith("/")) return [];
+    const rules: { source: string; destination: string }[] = [];
 
-    return [
-      {
+    // Browser error reports go to Sentry through this origin, so the CSP's
+    // connect-src stays 'self'. Off unless a valid DSN is set (lib/sentry-tunnel.ts).
+    const sentryUrl = sentryEnvelopeUrl(process.env.NEXT_PUBLIC_SENTRY_DSN);
+    if (sentryUrl) rules.push({ source: "/monitoring", destination: sentryUrl });
+
+    if (backendOrigin && !backendOrigin.startsWith("/")) {
+      rules.push({
         source: "/api/:path*",
         destination: `${backendOrigin.replace(/\/$/, "")}/:path*`,
-      },
-    ];
+      });
+    }
+    return rules;
   },
 };
 

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { ISSUES_URL } from "@/lib/links";
+import { reportError } from "@/lib/report-error";
 
 /* The last line of defence: it replaces the root layout when the layout itself
    throws, so it brings its own <html> and <body>, and none of the site's CSS or
@@ -16,6 +17,7 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error(error);
+    reportError(error);
   }, [error]);
 
   return (
