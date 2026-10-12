@@ -78,6 +78,7 @@ from auth.session import (  # noqa: E402
 )
 from db import init_db  # noqa: E402
 from models import AgentInfo, AgentResult, AuditLogEntry, ChatMessage, ChecklistItem, FixApplication, FixApplicationState, FixApplyPreview, FixPlan, FixSuggestion, FixSummary, GitHubInstallation, RepoFileEntry, ScanReport, ScanRepoLink, ScanRequest, ScanSummary, User, VerificationResult  # noqa: E402
+from observability import init_error_tracking  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from usage import has_reservation  # noqa: E402
 from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
@@ -121,6 +122,7 @@ logger = logging.getLogger(__name__)
 
 # Creates backend/data/sentinels.db and brings its schema up to date if it
 # isn't already — safe to call on every startup (see db.init_db's docstring).
+init_error_tracking()
 init_db()
 
 VERSION = "0.1.0"

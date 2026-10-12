@@ -1,0 +1,30 @@
+{
+  "status": "passed",
+  "mode": "local",
+  "writes": true,
+  "driver": "sqlite",
+  "checks": {
+    "migration_version": 19,
+    "foreign_keys": "passed",
+    "integrity": "passed",
+    "partial_index": "passed",
+    "quota": {
+      "attempts": 12,
+      "accepted": 5,
+      "used_after_double_refund": 4,
+      "replay": "passed"
+    },
+    "responsiveness": {
+      "samples": 12,
+      "max_connection_query_ms": 4.08,
+      "max_event_loop_gap_ms": 15.5,
+      "event_loop_limit_ms": 250
+    },
+    "new_process_source_readback": "passed",
+    "backup_restore": {
+      "target": "temporary-local",
+      "schema_rows_sequences_equal": true,
+      "new_process_readback": "passed"
+    }
+  }
+}

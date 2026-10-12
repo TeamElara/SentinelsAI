@@ -10,7 +10,8 @@ Render → New → Web Service → point at this repo.
 
 - **Root directory:** `backend`
 - **Build command:** `pip install -r requirements.txt`
-- **Start command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- **Runtime:** Python 3.13 (`.python-version`).
+- **Start command:** `uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1`
   (Render sets `$PORT` itself — don't hardcode 8011/8000, those are only the
   local dev ports in `.claude/launch.json`.)
 
@@ -21,13 +22,14 @@ for the full explanation of each one. The short version:
 
 | Variable | Required? | Notes |
 |---|---|---|
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Yes, on Render | Direct Turso primary (`libsql://` or `https://`). Render startup refuses ephemeral local SQLite. Keep both values server-side; never add them to Vercel public variables. |
 | `SENTINELS_SESSION_SECRET` | Yes | Any long random string — sign-in refuses to work without it. |
 | `SENTINELS_FRONTEND_ORIGIN` | Yes, for a real deploy | Your Vercel URL, e.g. `https://sentinels.vercel.app`. Used for the post-sign-in redirect, the CORS allow-list, and whether the session cookie is marked `Secure` — one value now drives all three, so it must be exact (scheme included). |
 | `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` | Yes | From the GitHub App's settings page. Powers "Sign in with GitHub". |
 | `GITHUB_APP_SLUG` / `GITHUB_APP_ID` | Only for autofix | Needed to open pull requests, not for sign-in. |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | Only for autofix | See below — this is the one setting that needs a Render-specific trick. |
 | `GROQ_API_KEY` | No | Scans work fully without it; only the AI summary sentence is skipped. |
-| `SENTINELS_PDF_ENABLED` | No | Leave unset (off) on Render: PDF export needs Chromium, which this build doesn't install and whose memory use on a 512 MB instance hasn't been measured. See `docs/NETWORK-EGRESS.md`. |
+| `SENTINELS_PDF_ENABLED` | No | Leave unset (off) on Render Free: one PDF render needs roughly 350-470 MB for Chromium alone, measured locally on 12 Oct 2026, which doesn't fit beside the backend in 512 MB. See `docs/NETWORK-EGRESS.md`. |
 
 ### The GitHub App private key on Render
 
@@ -44,6 +46,7 @@ else about the code needs to change.
 
 Vercel → New Project → import this repo → set **Root Directory** to
 `frontend` (Vercel auto-detects Next.js from there, no build command needed).
+Select Node 24, matching `frontend/package.json` and CI.
 
 ### Environment variables
 
@@ -54,13 +57,16 @@ Vercel → New Project → import this repo → set **Root Directory** to
 
 ## 3. After both are live
 
-The draft Track B/C integration activates durable daily quotas and `/usage`.
+The merged Track B/C integration enforces durable daily quotas and `/usage`.
 Run one backend worker. The fetch SSE client requires a canonical UUID
 `request_id`; reconnects must retain that same ID. A disconnected subscriber
 leaves one bounded job running, and deadline failures or ScanBusy refund
 quota. Both REST and SSE share the daily counters. See
 [Track B/C handoff](TRACK-B-C-HANDOFF.md) for verification and remaining
-remote database/deployment gates before releasing that integration.
+remote database/deployment gates before public launch. Use the repeatable
+commands in [Track C live acceptance](TRACK-C-LIVE-ACCEPTANCE.md) to record
+database and deployed-header evidence. Local acceptance does not close the
+remote Turso or Render restart/redeploy gates.
 
 - Update the GitHub App's **Homepage URL** (App settings page) to the Vercel
   domain instead of `localhost:3000`.
@@ -120,6 +126,14 @@ remote database/deployment gates before releasing that integration.
   Subscribe to events tick **Installation**. In GitHub's "Recent deliveries" a
   working setup shows 200; a 401 means the secret doesn't match, a 503 means
   `GITHUB_APP_WEBHOOK_SECRET` isn't set on Render.
+- Error tracking (optional): create a Sentry project and set `SENTRY_DSN` on
+  Render. Reports go through `backend/observability.py`, which keeps only the
+  error type, code location, route (ids removed) and version, and drops
+  everything a scan touches. After deploying, cause one harmless error and open
+  the report in Sentry: it should show no address, query string, header or
+  cookie. The scrubbing is covered by tests against the real SDK, but a live
+  report is the real check. There is no browser-side Sentry yet: frontend
+  errors still only appear in the browser console and Vercel's logs.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies

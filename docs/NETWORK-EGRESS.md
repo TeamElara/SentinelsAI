@@ -82,19 +82,46 @@ Covered by `tests/test_net_policy.py`, `test_net_client.py`,
   resolves privately is listed as skipped. The names come from public DNS
   and certificate logs, so this reveals nothing new, but it is shown.
 
-## PDF export on Render Free: not measured yet
+## PDF export on Render Free: launch with it off
 
-`SENTINELS_PDF_ENABLED` is off by default and should stay off on Render
-until both of these are settled:
+`SENTINELS_PDF_ENABLED` is off by default and stays off on Render Free.
+Chromium does not leave enough room on a 512 MB instance.
 
-1. **Chromium isn't installed by the documented build.** `docs/DEPLOY.md`'s
-   build command is `pip install -r requirements.txt`, which installs the
-   Playwright package but not a browser. PDF export needs
-   `playwright install chromium` in the build as well (and may need system
-   libraries the native runtime doesn't have).
-2. **Whether it fits in 512 MB is unknown.** To find out: deploy a throwaway
-   Free service with the browser installed and `SENTINELS_PDF_ENABLED=true`,
-   export a PDF of a large report three times, and watch the service's
-   memory graph and Events for an out-of-memory restart. If it restarts, or
-   peaks close to the limit while a scan is also running, launch with PDF
-   off.
+**Measured on 12 Oct 2026**, locally (macOS, Apple silicon, Python 3.12,
+Playwright 1.61.0, Chromium headless shell 149), rendering real reports
+through `report.pdf.generate_pdf` and sampling the memory of the browser's
+process tree every 30 ms:
+
+| Report | Browser + Playwright driver, peak | Render time |
+|---|---|---|
+| 10 findings | about 350 MB | 0.7 s |
+| 150 findings | about 380-400 MB | 0.7 s |
+| 600 findings | about 465 MB | 0.9 s |
+
+The backend process itself is about 85 MB idle, before any scan runs. So one
+PDF render puts the service at roughly 435-550 MB, at or over the limit with
+nothing else going on. Chromium's `--single-process` mode brought the browser
+down to about 305 MB (150 findings), which is still too close once a scan is
+running, and that mode is unsupported and less stable.
+
+How far to trust these numbers: they are the sum of each process's resident
+memory, which counts shared pages more than once, and they come from macOS,
+not Render's Linux. They could be off by tens of megabytes in either
+direction. They are not off by the several hundred it would take to make
+this comfortable.
+
+What would change the decision:
+
+- A paid instance with 2 GB, with `playwright install chromium` added to the
+  build (the documented build installs the Python package but no browser,
+  and the native runtime may lack system libraries Chromium needs). Measure
+  again there before switching it on.
+- Rendering PDFs somewhere else (a separate worker, or in the user's browser
+  from the HTML export).
+
+The sandbox itself was checked against the real browser the same day: a page
+referencing a local server through a stylesheet, `@import`, a background
+image, a font, scripts, `fetch`, images, an iframe, `<object>`, `<video>`,
+a meta refresh and the cloud metadata address produced a PDF and **zero**
+requests. `tests/test_pdf_real_browser.py` repeats that check wherever
+Chromium is installed and is skipped where it isn't (CI).
