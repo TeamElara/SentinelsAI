@@ -75,7 +75,7 @@ def test_global_ai_cap_is_atomic_and_survives_restart(account, monkeypatch):
     monkeypatch.setenv('SENTINELS_DAILY_GLOBAL_AI', '1')
     usage.reserve_global_ai()
     monkeypatch.setattr(usage, 'WORKER_ID', 'replacement')
-    with pytest.raises(HTTPException, match='') as exc:
+    with pytest.raises(HTTPException) as exc:
         usage.reserve_global_ai()
     assert exc.value.status_code == 429
 
