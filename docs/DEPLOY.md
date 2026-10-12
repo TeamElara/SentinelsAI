@@ -119,6 +119,14 @@ remote database/deployment gates before releasing that integration.
   Subscribe to events tick **Installation**. In GitHub's "Recent deliveries" a
   working setup shows 200; a 401 means the secret doesn't match, a 503 means
   `GITHUB_APP_WEBHOOK_SECRET` isn't set on Render.
+- Error tracking (optional): create a Sentry project and set `SENTRY_DSN` on
+  Render. Reports go through `backend/observability.py`, which keeps only the
+  error type, code location, route (ids removed) and version, and drops
+  everything a scan touches. After deploying, cause one harmless error and open
+  the report in Sentry: it should show no address, query string, header or
+  cookie. The scrubbing is covered by tests against the real SDK, but a live
+  report is the real check. There is no browser-side Sentry yet: frontend
+  errors still only appear in the browser console and Vercel's logs.
 - Run one real sign-in and one real scan end to end before calling it done —
   the same rule this project applies to autofix (`docs/PLAN-v5.md`'s "a fix
   isn't done when a PR opens, it's done when the re-scan proves it") applies
