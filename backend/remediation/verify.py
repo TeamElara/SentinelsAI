@@ -21,6 +21,8 @@ this finding moves to `verified` and keeps the result as its evidence.
 """
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timezone
 
 import httpx
@@ -140,7 +142,7 @@ async def _application_to_verify(
     """
     await refresh_applications(report, user, provider=provider)
 
-    application = active_fix_applications(report.id, [finding_key]).get(finding_key)
+    application = (await asyncio.to_thread(active_fix_applications, report.id, [finding_key])).get(finding_key)
     if application is None:
         return None
 
@@ -183,7 +185,7 @@ async def _rerun_agent(
         # re-downloads a tarball every run, so the unauthenticated ceiling is
         # a real wall, not a theoretical one. Setting the header on the client
         # is enough -- `fetch_repo` makes all of its calls through it.
-        installation = active_installation_for(user_id, owner)
+        installation = await asyncio.to_thread(active_installation_for, user_id, owner)
         if installation is not None:
             provider = provider or default_provider()
             try:
@@ -266,7 +268,7 @@ async def verify_finding(
     write is the `fix_applications` update at the end, and only when there is
     a merged application to close out.
     """
-    _check_ownership(report.id, user)
+    await asyncio.to_thread(_check_ownership, report.id, user)
 
     finding = next((f for f in report.findings if f.id == finding_key), None)
     if finding is None:
@@ -329,9 +331,9 @@ async def verify_finding(
     )
 
     if application is not None:
-        save_verification(application.id, verification)
+        await asyncio.to_thread(save_verification, application.id, verification)
         verification.recorded = True
-        write_audit(
+        await asyncio.to_thread(write_audit,
             user.id, report.id, finding_key, "fix_verified",
             f"agent={agent_cls.name} target_fixed={verification.target_fixed} "
             f"score {before}->{after} application={application.id}",
@@ -340,7 +342,7 @@ async def verify_finding(
         # Still worth a row: someone asked Sentinels to check, and the answer
         # is part of the history of this scan even when no PR of ours produced
         # the change (CLAUDE.md remediation rule 10).
-        write_audit(
+        await asyncio.to_thread(write_audit,
             user.id, report.id, finding_key, "fix_verified_unrecorded",
             f"agent={agent_cls.name} target_fixed={verification.target_fixed} "
             f"score {before}->{after} (no fix application for this finding)",

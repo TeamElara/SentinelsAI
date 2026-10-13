@@ -26,6 +26,8 @@ The two invariants signed off in PLAN-v5 Stage B, stated once:
 """
 from __future__ import annotations
 
+import asyncio
+
 import re
 import time
 
@@ -254,14 +256,14 @@ async def apply_fixes(
     if not finding_keys:
         raise ApplyError("No findings selected.", status=422)
 
-    _check_ownership(report.id, user)                                 # 1
+    await asyncio.to_thread(_check_ownership, report.id, user)                                 # 1
 
     try:
-        owner, repo, url_ref = repo_target(report)
+        owner, repo, url_ref = await asyncio.to_thread(repo_target, report)
     except ValueError as exc:
         raise ApplyError(f"This scan's target is not a GitHub repository: {exc}", 400) from exc
 
-    installation = active_installation_for(user.id, owner)            # 1 (invariant #4)
+    installation = await asyncio.to_thread(active_installation_for, user.id, owner)            # 1 (invariant #4)
     if installation is None:
         raise ApplyError(
             f"Sentinels has no repository access for {owner!r}. Install the Sentinels App "
@@ -269,7 +271,7 @@ async def apply_fixes(
             status=403,
         )
 
-    pairs = _load_plans(report, finding_keys)
+    pairs = await asyncio.to_thread(_load_plans, report, finding_keys)
     if not dry_run:
         disabled = sorted({plan.fixer_slug for _, plan in pairs if not fixer_enabled(plan.fixer_slug)})
         if disabled:
@@ -278,7 +280,7 @@ async def apply_fixes(
                 "You can still preview it.",
                 status=403,
             )
-    existing = _check_idempotency(report.id, finding_keys)            # 2
+    existing = await asyncio.to_thread(_check_idempotency, report.id, finding_keys)            # 2
     if existing is not None:
         return FixApplyResult(
             repo=f"{owner}/{repo}",
@@ -311,7 +313,7 @@ async def apply_fixes(
             # GitHub is the authority on whether the App is still installed.
             # Stop using the grant now rather than failing the same way on
             # every later attempt, until the user installs the App again.
-            revoke_installation_everywhere(installation.installation_id)
+            await asyncio.to_thread(revoke_installation_everywhere, installation.installation_id)
             raise ApplyError(
                 f"The Sentinels App was uninstalled from {owner} on GitHub. "
                 "Install it again from Settings, then try again.",
@@ -347,7 +349,7 @@ async def apply_fixes(
         base_branch = url_ref or default_branch
 
         await _check_drift(client, owner, repo, base_branch, patches)        # 5
-        _check_budget(report.id)                                             # 6
+        await asyncio.to_thread(_check_budget, report.id)                                             # 6
 
         branch = pr_body.branch_name(report.id, int(time.time()))
         message = pr_body.commit_message([finding for finding, _ in pairs])
@@ -382,7 +384,7 @@ async def apply_fixes(
         try:
             await commit_files(writer, base_branch, base_sha, branch, message, files)  # 9
         except GitHubWriteError as exc:
-            write_audit(user.id, report.id, None, "pr_failed", f"commit failed: {exc}")
+            await asyncio.to_thread(write_audit, user.id, report.id, None, "pr_failed", f"commit failed: {exc}")
             raise ApplyError(str(exc), status=exc.status or 502) from exc
 
         try:
@@ -392,7 +394,7 @@ async def apply_fixes(
             # it rather than leaving a stray `sentinels/...` branch in
             # someone's repository (Stage B step 10).
             removed = await writer.delete_ref(branch)
-            write_audit(
+            await asyncio.to_thread(write_audit,
                 user.id, report.id, None, "pr_failed",
                 f"PR creation failed on branch {branch}: {exc} "
                 f"(branch {'removed' if removed else 'could NOT be removed'})",
@@ -401,7 +403,7 @@ async def apply_fixes(
 
     applications = []                                                            # 10
     for finding, plan in pairs:
-        application = save_fix_application(
+        application = await asyncio.to_thread(save_fix_application,
             report.id,
             plan,
             FixApplicationState.PR_OPEN,
@@ -410,7 +412,7 @@ async def apply_fixes(
             pr_number=pull.number,
         )
         applications.append(application)
-        write_audit(
+        await asyncio.to_thread(write_audit,
             user.id, report.id, finding.id, "pr_opened",
             f"{owner}/{repo} branch={branch} pr=#{pull.number} fixer={plan.fixer_slug} "
             f"files={','.join(p.path for p in plan.patches)}",
@@ -440,17 +442,17 @@ async def refresh_applications(
     unreachable) is returned unchanged rather than failing the whole list —
     the stored history is still worth showing.
     """
-    applications = list_fix_applications(report.id)
+    applications = await asyncio.to_thread(list_fix_applications, report.id)
     open_rows = [a for a in applications if a.state == FixApplicationState.PR_OPEN and a.pr_number]
-    if not open_rows or scan_owner(report.id) != user.id:
+    if not open_rows or (await asyncio.to_thread(scan_owner, report.id)) != user.id:
         return applications
 
     try:
-        owner, repo, _ = repo_target(report)
+        owner, repo, _ = await asyncio.to_thread(repo_target, report)
     except ValueError:
         return applications
 
-    installation = active_installation_for(user.id, owner)
+    installation = await asyncio.to_thread(active_installation_for, user.id, owner)
     if installation is None:
         return applications
 
@@ -483,9 +485,9 @@ async def refresh_applications(
                     refreshed[application.id] = state
 
     for application_id, state in refreshed.items():
-        update_fix_application_state(application_id, state)
-        write_audit(user.id, report.id, None, f"pr_{state.value}", f"application {application_id}")
+        await asyncio.to_thread(update_fix_application_state, application_id, state)
+        await asyncio.to_thread(write_audit, user.id, report.id, None, f"pr_{state.value}", f"application {application_id}")
 
     if refreshed:
-        applications = list_fix_applications(report.id)
+        applications = await asyncio.to_thread(list_fix_applications, report.id)
     return applications

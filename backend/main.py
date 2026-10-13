@@ -127,12 +127,22 @@ logger = logging.getLogger(__name__)
 init_error_tracking()
 init_db()
 
+
+@asynccontextmanager
+async def _lifespan(app):
+    try:
+        yield
+    finally:
+        from remote_db import shutdown
+        await asyncio.to_thread(shutdown)
+
 VERSION = "0.1.0"
 
 app = FastAPI(
     title="Sentinels",
     description="Passive website security auditor. Read-only checks only.",
     version=VERSION,
+    lifespan=_lifespan,
 )
 
 # The browser treats http://localhost:3000 (the Next.js frontend) and
@@ -318,7 +328,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
         return _fail(refusal)
 
     session_token = new_token()
-    sign_in(
+    await asyncio.to_thread(sign_in,
         github_id=identity.github_id,
         github_login=identity.login,
         avatar_url=identity.avatar_url,
@@ -422,7 +432,7 @@ async def auth_install_callback(
     if not installation_id:
         return _fail("missing_installation")
 
-    user = optional_user(request)
+    user = await asyncio.to_thread(optional_user, request)
     if user is None:
         return _fail("not_signed_in")
 
@@ -450,7 +460,7 @@ async def auth_install_callback(
         return _fail("installation_lookup_failed")
 
     try:
-        save_installation(
+        await asyncio.to_thread(save_installation,
             user_id=user.id,
             installation_id=installation_id,
             account_login=account,
@@ -507,7 +517,7 @@ async def github_webhook(request: Request) -> dict:
     if not isinstance(installation_id, int) or action not in _INSTALLATION_ENDED:
         return {"ok": True, "ignored": f"installation.{action}"}
 
-    revoked = revoke_installation_everywhere(installation_id)
+    revoked = await asyncio.to_thread(revoke_installation_everywhere, installation_id)
     logger.info("github webhook: installation %s %s, %s grant(s) revoked", installation_id, action, revoked)
     return {"ok": True, "revoked": revoked}
 
@@ -759,8 +769,8 @@ async def scan(request: UrlScanRequest, user: User = Depends(current_user)) -> S
     genuinely awaits something — `run_scan` awaits real HTTP requests inside
     the agents it calls.
     """
-    require_permission(request.permission_confirmed, user, request.url)
-    require_verified_domain(user, request.url)
+    await asyncio.to_thread(require_permission, request.permission_confirmed, user, request.url)
+    await asyncio.to_thread(require_verified_domain, user, request.url)
     try:
         return await scan_operation(user.id, 'url_scan', lambda: run_scan(request.url, user_id=user.id))
     except ValueError as exc:
@@ -852,8 +862,8 @@ async def scan_stream(
     """
     reject_cross_site_scan_start(request)
     reconnect = await asyncio.to_thread(has_reservation, user.id, 'url_scan', request_id)
-    require_permission(permission_confirmed, user, url, record=not reconnect)
-    require_verified_domain(user, url)
+    await asyncio.to_thread(require_permission, permission_confirmed, user, url, record=not reconnect)
+    await asyncio.to_thread(require_verified_domain, user, url)
 
     async def events():
         async with _closing(run_scan_stream(url, user_id=user.id)) as stream:
@@ -1015,7 +1025,7 @@ async def finding_fix(
     cached result instantly. `?regenerate=true` forces a fresh LLM call.
     With no GROQ_API_KEY: returns 503 with a clear message, never a 500.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
 
     finding = next((f for f in report.findings if f.id == finding_key), None)
     if finding is None:
@@ -1077,7 +1087,7 @@ async def finding_fix_plan(
     1/2 findings ever have one) -- a normal answer, not an error; the
     frontend falls back to the existing AI `FixSuggestionPanel`.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
     try:
         return await preview_plan(report, finding_key)
     except NotARepoScan as exc:
@@ -1110,7 +1120,7 @@ async def scan_fix_plan(
     (`fixable=False`, `plan=null`) -- one unfixable finding in the batch is
     never a reason to fail the whole request.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
     if not body.finding_keys:
         raise HTTPException(status_code=422, detail="finding_keys must not be empty")
 
@@ -1169,7 +1179,7 @@ async def scan_fix_apply(
     the same checks run and then one branch, one commit, and one pull request
     are created. Sentinels never merges it.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
     if not body.dry_run:
         require_writes_running()
 
@@ -1190,7 +1200,7 @@ async def scan_fix_applications(
     `state` has to reflect GitHub's answer rather than what Sentinels last
     happened to see.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
     return await refresh_applications(report, user)
 
 
@@ -1212,7 +1222,7 @@ async def finding_verify(
     that hasn't merged yet is refused rather than verified against the old
     state of the repository.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
 
     async def verify():
         try:
@@ -1243,7 +1253,7 @@ async def chat_post(scan_id: str, body: ChatQuestion, user: User = Depends(curre
     Persists both the user question and the assistant answer to the DB so the
     conversation survives refresh. With no GROQ_API_KEY: returns 503, not 500.
     """
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
     if not get_api_key():
         raise HTTPException(status_code=503, detail="Chat requires GROQ_API_KEY.")
 
@@ -1282,9 +1292,9 @@ async def scan_export(scan_id: str, format_id: str, user: User = Depends(current
     if exporter is None:
         raise HTTPException(status_code=404, detail=f"Unknown export format {format_id!r}")
 
-    report = load_owned_scan(scan_id, user)
+    report = await asyncio.to_thread(load_owned_scan, scan_id, user)
 
-    fixes = load_fixes_for_scan(scan_id, PROMPT_VERSION)
+    fixes = await asyncio.to_thread(load_fixes_for_scan, scan_id, PROMPT_VERSION)
     content = await pdf_operation(user.id, lambda: exporter.render(report, fixes)) if format_id == 'pdf' else await exporter.render(report, fixes)
 
     host = urlparse(report.url).netloc or "report"
