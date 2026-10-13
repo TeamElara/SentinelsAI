@@ -333,3 +333,67 @@ async def test_the_install_code_is_exchanged_without_a_redirect_uri(monkeypatch)
     _patch_oauth_transport(monkeypatch, handler)
     assert await exchange_code("the-code") == "tok"
     assert "redirect_uri" not in seen["body"]
+
+
+# --- Install redirects that arrive at the sign-in callback -------------------
+#
+# With "Request user authorization (OAuth) during installation" on, GitHub
+# switches the Setup URL off and sends the browser to the callback URL after an
+# install. The sign-in callback has to hand those to the install logic.
+
+
+def _via_callback(client, cookie, *, installation_id=500, code="good-code", state=STATE):
+    client.cookies.set("sentinels_session", cookie)
+    client.cookies.set("sentinels_install_state", STATE)
+    query = f"installation_id={installation_id}&setup_action=install&state={state}"
+    if code:
+        query += f"&code={code}"
+    return client.get(f"/auth/github/callback?{query}")
+
+
+def test_an_install_redirect_to_the_sign_in_callback_saves_the_installation(client, github):
+    from storage.installations import list_installations
+
+    user, cookie = _signed_in_cookie(1, "alice")
+    github["identity"] = _identity_of(user)
+
+    res = _via_callback(client, cookie)
+
+    assert "installed=octo" in res.headers["location"]
+    assert [i.installation_id for i in list_installations(user.id)] == [500]
+    # It is the install flow, so no sign-in session is issued or replaced.
+    assert "sentinels_session" not in res.headers.get("set-cookie", "")
+
+
+def test_it_enforces_every_check_the_install_callback_does(client, github):
+    from storage.installations import list_installations
+
+    user, cookie = _signed_in_cookie(1, "alice")
+    github["identity"] = _identity_of(user)
+
+    assert _error(_via_callback(client, cookie, state="wrong")) == "state_mismatch"
+    assert _error(_via_callback(client, cookie, code="")) == "authorization_required"
+    assert _error(_via_callback(client, cookie, code="bad-code")) == "authorization_failed"
+    assert _error(_via_callback(client, cookie, installation_id=999)) == "installation_not_yours"
+    github["identity"] = GitHubIdentity(github_id=user.github_id + 1, login="mallory", avatar_url=None)
+    assert _error(_via_callback(client, cookie)) == "identity_mismatch"
+    assert list_installations(user.id) == []
+
+
+def test_an_install_redirect_without_a_session_saves_nothing(client, github):
+    from storage.installations import list_installations
+
+    client.cookies.set("sentinels_install_state", STATE)
+    res = client.get(f"/auth/github/callback?installation_id=500&setup_action=install&state={STATE}&code=good-code")
+
+    assert _error(res) == "not_signed_in"
+    assert github["exchanged"] == []
+
+
+def test_a_sign_in_redirect_is_still_a_sign_in(client, github):
+    """No installation_id: the sign-in checks run, and a missing state cookie
+    is refused with the sign-in error, not an install one."""
+    res = client.get(f"/auth/github/callback?code=good-code&state={STATE}")
+
+    assert res.headers["location"].endswith("/login?error=state_mismatch")
+    assert github["exchanged"] == []

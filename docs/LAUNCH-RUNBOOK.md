@@ -47,13 +47,19 @@ Do these before the first install, because several are **refused outright**
 until they're set.
 
 - [ ] **Homepage URL**: `<web>`.
-- [ ] **Callback URL**: `<web>/api/auth/github/callback` (exact path).
-- [ ] **Setup URL**: the install-callback path, `<web>/api/auth/github/install/callback`,
-      with *Redirect on update* ticked.
+- [ ] **Callback URL**: `<web>/api/auth/github/callback` (exact path), and make
+      it the **first** one in the list. GitHub sends the browser to the first
+      callback URL after an install, so a `localhost` URL listed above it would
+      send every install there. Keep localhost URLs below it for local work,
+      or leave them out.
 - [ ] **General → Identifying and authorizing users → "Request user
       authorization (OAuth) during installation": tick it.** Without this every
       install is refused with "GitHub didn't confirm who you are during the
-      install".
+      install". Ticking it **turns the Setup URL off**, which is expected: GitHub
+      then sends the browser to the callback URL after an install, with
+      `installation_id` added, and Sentinels finishes the install there. Leave
+      the Setup URL empty; there is no `/api/auth/github/install/callback` page
+      on the frontend.
 - [ ] **Where can this App be installed**: *Any account*, or the invited
       people can't install it.
 - [ ] **Permissions**: Contents (read & write), Pull requests (read & write),

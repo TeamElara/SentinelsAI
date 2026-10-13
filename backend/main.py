@@ -290,8 +290,24 @@ def auth_login(request: Request) -> RedirectResponse:
 
 
 @app.get("/auth/github/callback")
-async def auth_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
-    """GitHub's landing point after the user approves (or denies) sign-in.
+async def auth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    installation_id: int = 0,
+    setup_action: str = "",
+) -> RedirectResponse:
+    """GitHub's landing point after the user approves (or denies) sign-in, and
+    after they install the App.
+
+    With "Request user authorization (OAuth) during installation" on, GitHub
+    turns the App's Setup URL off and sends the browser to the *callback* URL
+    after an install, with `installation_id` and `setup_action` added. An
+    install redirect is told apart by `installation_id`, which a sign-in
+    redirect never carries, and goes to the install logic instead of being
+    read as a sign-in whose state cookie doesn't match.
+
+    For a sign-in:
 
     Trades `code` for a token, reads the identity it belongs to, opens a
     session, and sends the browser back to the app with the session cookie
@@ -299,6 +315,15 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
     `?error=` instead of showing a bare API error page — the user is on a
     browser tab, not a curl session.
     """
+    if installation_id:
+        return await auth_install_callback(
+            request,
+            installation_id=installation_id,
+            setup_action=setup_action,
+            state=state,
+            code=code,
+        )
+
     frontend = get_frontend_origin()
     expected_state = request.cookies.get("sentinels_oauth_state")
 

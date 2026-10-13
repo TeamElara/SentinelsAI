@@ -97,8 +97,12 @@ remote Turso or Render restart/redeploy gates.
   until the App is requesting something.
 - On the App's settings page (`github.com/settings/apps/<slug>` → General →
   Identifying and authorizing users), turn on **Request user authorization
-  (OAuth) during installation**. The install callback
-  (`/auth/github/install/callback`) needs the `code` GitHub then adds to prove
+  (OAuth) during installation**. That setting turns the App's Setup URL off:
+  GitHub then sends the browser, after an install, to the **first** Callback URL
+  in the list (`<frontend>/api/auth/github/callback`), adding `installation_id`.
+  Sentinels' sign-in callback recognises that and hands it to the install logic
+  (`/auth/github/install/callback`, which a direct request can also reach). That
+  logic needs the `code` GitHub then adds to prove
   that the person finishing the install is the signed-in Sentinels user and can
   access that installation. With the setting off, every install is refused with
   "GitHub didn't confirm who you are during the install". The App must also be
