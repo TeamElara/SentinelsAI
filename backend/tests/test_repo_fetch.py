@@ -226,3 +226,70 @@ async def test_path_traversal_entries_never_leave_the_repo_directory(work_dirs, 
 
     assert not list(Path(tmp_path).rglob("escaped.txt"))
     assert work_dirs() == []
+
+
+# --- GitHub API token (anonymous calls share Render's IP allowance of 60/hour) ----
+
+
+def recording_github(tarball: bytes):
+    """GitHub whose tarball hop redirects to another host, recording each request."""
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, request.headers.get("authorization")))
+        if request.url.path == "/repos/octo/demo":
+            return httpx.Response(200, json={"size": 100, "default_branch": "main"})
+        if request.url.path.startswith("/repos/octo/demo/tarball/"):
+            return httpx.Response(302, headers={"location": "https://codeload.github.com/octo/demo/legacy.tar.gz/main"})
+        if request.url.host == "codeload.github.com":
+            return httpx.Response(200, content=tarball)
+        return httpx.Response(404)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), seen
+
+
+async def test_with_a_token_the_github_api_requests_carry_it_and_the_redirect_does_not(work_dirs, monkeypatch):
+    monkeypatch.setenv("SENTINELS_GITHUB_API_TOKEN", "  test-token-123  ")
+    client, seen = recording_github(make_tarball({"README.md": b"x"}))
+
+    async with client:
+        async with fetch_repo("octo", "demo", None, client):
+            pass
+
+    assert seen == [
+        ("api.github.com", "Bearer test-token-123"),   # repo metadata
+        ("api.github.com", "Bearer test-token-123"),   # tarball request
+        ("codeload.github.com", None),                 # the redirect target never gets it
+    ]
+
+
+async def test_without_a_token_nothing_is_sent(work_dirs, monkeypatch):
+    monkeypatch.delenv("SENTINELS_GITHUB_API_TOKEN", raising=False)
+    client, seen = recording_github(make_tarball({"README.md": b"x"}))
+
+    async with client:
+        async with fetch_repo("octo", "demo", None, client):
+            pass
+
+    assert [auth for _, auth in seen] == [None, None, None]
+
+
+async def test_a_blank_token_counts_as_no_token(work_dirs, monkeypatch):
+    # An empty value in an env file must never be sent as "Bearer ".
+    monkeypatch.setenv("SENTINELS_GITHUB_API_TOKEN", "   ")
+    client, seen = recording_github(make_tarball({"README.md": b"x"}))
+
+    async with client:
+        async with fetch_repo("octo", "demo", None, client):
+            pass
+
+    assert [auth for _, auth in seen] == [None, None, None]
+
+
+def test_the_token_is_never_set_on_the_shared_client():
+    """repo_orchestrator hands this client to agents that call OSV and Docker Hub."""
+    from pathlib import Path
+
+    source = Path("repo_orchestrator.py").read_text()
+    assert "SENTINELS_GITHUB_API_TOKEN" not in source
+    assert "Authorization" not in source

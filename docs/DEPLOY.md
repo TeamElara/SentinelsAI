@@ -29,6 +29,7 @@ for the full explanation of each one. The short version:
 | `GITHUB_APP_SLUG` / `GITHUB_APP_ID` | Only for autofix | Needed to open pull requests, not for sign-in. |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | Only for autofix | See below — this is the one setting that needs a Render-specific trick. |
 | `GROQ_API_KEY` | No | Scans work fully without it; only the AI summary sentence is skipped. |
+| `SENTINELS_GITHUB_API_TOKEN` | Wanted on a shared host | Raises the GitHub API limit for repository scans from 60 an hour per (shared) IP to 5,000 for the token. Fine-grained token, no permissions. Sent only to `api.github.com`, only by the repo fetcher. |
 | `SENTINELS_PDF_ENABLED` | No | Leave unset (off) on Render Free: one PDF render needs roughly 350-470 MB for Chromium alone, measured locally on 12 Oct 2026, which doesn't fit beside the backend in 512 MB. See `docs/NETWORK-EGRESS.md`. |
 
 ### The GitHub App private key on Render

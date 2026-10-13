@@ -131,6 +131,7 @@ key's contents. It mounts at `/etc/secrets/github-app-key.pem`.
 | `SENTINELS_ALLOWED_GITHUB_IDS` | `1234,5678` (the invited ids) | Invite-only beta |
 | `SENTINELS_ENABLED_FIXERS` | **leave unset** | Unset on a deployment means *no* fixer can open a PR |
 | `GROQ_API_KEY` | optional | AI summaries and chat |
+| `SENTINELS_GITHUB_API_TOKEN` | **wanted** | A fine-grained GitHub token with **no permissions**. Without it repository scans share Render's IP allowance of 60 GitHub API calls an hour and often fail with "GitHub API rate limit exceeded". Create it under the GitHub account the team uses (Settings → Developer settings → Personal access tokens → Fine-grained, Public repositories read-only); enter it only on Render |
 | `SENTRY_DSN` | optional, from step 5 | Error reports |
 | `SENTINELS_PDF_ENABLED` | **leave unset** (PDF off) | Chromium's memory on 512 MB is unmeasured |
 | `SENTINELS_DAILY_*` | optional | Defaults: 10 website scans, 10 repo scans, 10 verifications, 10 PDFs, 20 AI fixes, 20 chat, 100 AI calls a day |
