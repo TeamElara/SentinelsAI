@@ -27,9 +27,14 @@ answer 401, PDF export is off, the webhook ping answers 200. A cold start after
   is the first test of the install flow through GitHub itself.
 - The pause switches timed on the real service (§7).
 - The smoke test with two invited accounts and one uninvited (§6).
-- Memory under load: free-plan metrics are locked, and the backend runs two
-  extra database worker processes in a 512 MB instance. Watch the Render logs
-  for out-of-memory restarts.
+- Memory under load: free-plan metrics are locked, so Render can't show it. A
+  local measurement (macOS, Python 3.11, the production database driver against
+  a real Turso database, PDF off) gave **144 MB** idle (the server 99 MB, two
+  database worker processes 15 and 29 MB) and a **peak of 194 MB** with three
+  scans running at once, the most the app allows. That is well inside 512 MB,
+  but Linux and Python 3.13 differ somewhat and a larger target means more
+  findings in memory, so still watch the Render logs for out-of-memory
+  restarts.
 - Weekly encrypted backups (`docs/TRACK-C-OPERATIONS.md`), UptimeRobot, Sentry
   DSN, a rollback rehearsal, and every fixer's apply → merge → verify cycle.
 
