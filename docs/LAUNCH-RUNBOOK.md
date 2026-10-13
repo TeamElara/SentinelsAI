@@ -10,6 +10,34 @@ checklist. Tick as you go.
 Turso token, the Sentry DSN) into chat, a pull request, an issue or an AI
 session. Type each one only into the dashboard field named below.
 
+## Where things stand (13 October 2026)
+
+**Live:** the backend runs `main` on Render (Ohio, free plan, one worker, 3.13.7)
+against the Turso database `sentinels` in the **same region** (`aws-us-east-2`,
+organization `team-elara-organization`, created by the team's own Turso login so
+no individual's name is on it). Schema version 20. The deployment contract
+check and the frontend header/browser check pass. `/usage` and `/auth/me`
+answer 401, PDF export is off, the webhook ping answers 200. A cold start after
+16 minutes idle took about 42 s; a warm `/health` about 1 s.
+
+**Not done yet** (each is a step below):
+- App settings: the production callback URL first in the list, and the webhook
+  **Active** box ticked (§2).
+- One real install end to end on a throwaway repository (§6, rows 9-12). This
+  is the first test of the install flow through GitHub itself.
+- The pause switches timed on the real service (§7).
+- The smoke test with two invited accounts and one uninvited (§6).
+- Memory under load: free-plan metrics are locked, so Render can't show it. A
+  local measurement (macOS, Python 3.11, the production database driver against
+  a real Turso database, PDF off) gave **144 MB** idle (the server 99 MB, two
+  database worker processes 15 and 29 MB) and a **peak of 194 MB** with three
+  scans running at once, the most the app allows. That is well inside 512 MB,
+  but Linux and Python 3.13 differ somewhat and a larger target means more
+  findings in memory, so still watch the Render logs for out-of-memory
+  restarts.
+- Weekly encrypted backups (`docs/TRACK-C-OPERATIONS.md`), UptimeRobot, Sentry
+  DSN, a rollback rehearsal, and every fixer's apply → merge → verify cycle.
+
 Placeholders: `<api>` is the Render URL (`https://….onrender.com`), `<web>` is
 the Vercel URL, `<slug>` is the GitHub App's URL name.
 
@@ -36,7 +64,13 @@ must not use the local SQLite file.
       `turso db create sentinels`, `turso db show sentinels --url`,
       `turso db tokens create sentinels`. Check the Turso docs if a command
       has changed.
-- [ ] Keep the URL (`libsql://…`) and the token for step 3.
+- [ ] Put it **in the same region as the Render service** (Render shows its
+      region on the service page; a database in another region adds a round
+      trip to every query, and a scan or a quota check makes many). Turso's
+      free plan names the organization after the account you sign in with, so
+      sign in with an account that carries the team's name.
+- [ ] Keep the URL (`libsql://…`) and the token for step 3. They go only into
+      Render's Environment page; never into chat, a PR or an AI session.
 
 Worked when: step 3 deploys and the smoke test's "redeploy keeps my data" (§6)
 passes.
@@ -126,7 +160,9 @@ the production domain first.)
       Storing of IP Addresses** and keep **Data Scrubber** on. The privacy page
       promises the IP isn't stored; browser reports pass through Vercel, which
       may forward the visitor's IP in a header.
-- [ ] After the deploy, from a Render shell in `backend/`, send one test event:
+- [ ] After the deploy, send one test event. Render's free plan has no shell, so
+      do it from `backend/` on your own machine with the production DSN in the
+      environment for that one command (`SENTRY_DSN=… python -c …`):
       `python -c "import observability, sentry_sdk; observability.init_error_tracking(); sentry_sdk.capture_exception(RuntimeError('test https://example.com/path?token=abc')); sentry_sdk.flush()"`
 - [ ] Open the event in Sentry. **It must not contain** the address, the
       query string, a header, a cookie or an IP. The message should read
@@ -168,11 +204,16 @@ mind changing.
 ## 7. Measure the emergency switches
 
 - [ ] Set `SENTINELS_SCANS_PAUSED=1` on Render and **start a stopwatch**. Poll
-      `curl -s -o /dev/null -w '%{http_code}\n' -X POST <api>/scan` until the
-      answer is 503 (401 means not signed in yet; use a signed-in request).
-      Write the seconds into `DEPLOY.md` where it says "not measured yet", then
-      unset it.
-- [ ] Repeat for `SENTINELS_WRITES_PAUSED=1` with a fix apply.
+      `curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{"url":"https://example.com","permission_confirmed":true}' <api>/scan`
+      every couple of seconds. No session is needed: the pause is checked before
+      sign-in, so it answers **401 while scans run and 503 once paused**. Note
+      the seconds to the first 503 (and any 502s while the service restarts),
+      then unset it and note the seconds until 401 returns. Write the first
+      number into `DEPLOY.md` where it says "not measured yet".
+- [ ] Repeat for `SENTINELS_WRITES_PAUSED=1`. This one **does** need a signed-in
+      request, because a fix apply is refused with 401 before the pause is
+      looked at: use a throwaway repository's fix, signed in as an invited
+      account, and expect 503 once paused.
 
 ## 8. Backup before you widen access
 
