@@ -35,6 +35,8 @@ from pathlib import Path
 
 import httpx
 
+from github_api import public_api_headers
+
 GITHUB_API = "https://api.github.com"
 
 # Matches ANY "word://" prefix, same reasoning as orchestrator._SCHEME_RE --
@@ -78,23 +80,8 @@ BINARY_EXTENSIONS = {
 
 
 def _github_headers() -> dict[str, str]:
-    """Credentials for GitHub's API, only when `SENTINELS_GITHUB_API_TOKEN` is set.
-
-    Without one, every request counts against GitHub's limit for anonymous
-    callers: 60 an hour *per IP address*. On a shared host such as Render's free
-    plan that address is shared with other customers, so the allowance is often
-    gone before the first scan, and a repo scan then fails with "rate limit
-    exceeded". A token raises it to 5,000 an hour for that token alone. A
-    fine-grained token with no permissions reads public repositories and
-    nothing else.
-
-    Sent per request, never set on the client: the same client also talks to
-    other hosts (OSV, Docker Hub), which must not receive it. httpx drops an
-    `Authorization` header on a redirect to another origin, so the tarball's
-    hop to codeload.github.com doesn't carry it either.
-    """
-    token = os.environ.get("SENTINELS_GITHUB_API_TOKEN", "").strip()
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    """See `github_api.public_api_headers`: the optional API token, per request."""
+    return public_api_headers()
 
 
 def _raise_for_github_status(response: httpx.Response) -> None:

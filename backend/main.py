@@ -84,6 +84,7 @@ from observability import init_error_tracking  # noqa: E402
 from orchestrator import run_scan, run_scan_stream  # noqa: E402
 from usage import has_reservation  # noqa: E402
 from budgeted_operations import charged, scan_operation, pdf_operation, stream_response, get_usage  # noqa: E402
+from github_api import GitHubUnavailable  # noqa: E402
 from remediation.apply import ApplyError, apply_fixes, refresh_applications  # noqa: E402
 from remediation.linking import is_valid_name, is_valid_ref  # noqa: E402
 from remediation.patch import PlanValidationError  # noqa: E402
@@ -1124,6 +1125,8 @@ async def finding_fix_plan(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PlanValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitHubUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 # Each key is a round of GitHub reads on the installation's shared rate limit.
@@ -1158,6 +1161,8 @@ async def scan_fix_plan(
         results = await plan_and_save(report, body.finding_keys)
     except NotARepoScan as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GitHubUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
     return [
         FixPlanResult(finding_key=key, plan=plan, fixable=plan is not None)
