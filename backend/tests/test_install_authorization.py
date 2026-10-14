@@ -397,3 +397,101 @@ def test_a_sign_in_redirect_is_still_a_sign_in(client, github):
 
     assert res.headers["location"].endswith("/login?error=state_mismatch")
     assert github["exchanged"] == []
+
+
+# --- Why GitHub refused: a short fixed code, shown on the settings page -------
+
+
+def _real_exchange(monkeypatch, handler):
+    """`exchange_code` itself, with GitHub's token endpoint replaced."""
+    import httpx
+
+    from auth import github_oauth
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        github_oauth.httpx, "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+    )
+    monkeypatch.setenv("GITHUB_APP_CLIENT_ID", "id")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_SECRET", "secret")
+    return github_oauth
+
+
+@pytest.mark.parametrize(
+    "response, expected",
+    [
+        ({"json": {"error": "bad_verification_code", "error_description": "The code passed is incorrect"}}, "bad_verification_code"),
+        ({"json": {"error": "incorrect_client_credentials"}}, "incorrect_client_credentials"),
+        ({"json": {"error": "Has Spaces And CAPS"}}, "no_token"),   # not a plain code: never echoed
+        ({"json": {"unrelated": 1}}, "no_token"),
+        ({"status_code": 503, "text": "down"}, "http_503"),
+        ({"text": "<html>not json</html>"}, "not_json"),
+    ],
+)
+async def test_a_refused_code_exchange_records_a_short_code(monkeypatch, response, expected):
+    import httpx
+
+    def handler(request):
+        return httpx.Response(response.get("status_code", 200), json=response.get("json"), text=response.get("text"))
+
+    oauth = _real_exchange(monkeypatch, handler)
+    assert await oauth.exchange_code("a-code") is None
+    assert oauth.last_exchange_error() == expected
+
+
+async def test_a_network_failure_records_network_error(monkeypatch):
+    import httpx
+
+    def handler(request):
+        raise httpx.ConnectError("no route")
+
+    oauth = _real_exchange(monkeypatch, handler)
+    assert await oauth.exchange_code("a-code") is None
+    assert oauth.last_exchange_error() == "network_error"
+
+
+async def test_a_successful_exchange_clears_an_earlier_reason(monkeypatch):
+    import httpx
+
+    answers = iter([{"error": "bad_verification_code"}, {"access_token": "tok"}])
+    oauth = _real_exchange(monkeypatch, lambda request: httpx.Response(200, json=next(answers)))
+
+    assert await oauth.exchange_code("one") is None
+    assert oauth.last_exchange_error() == "bad_verification_code"
+    assert await oauth.exchange_code("two") == "tok"
+    assert oauth.last_exchange_error() is None
+
+
+def test_the_install_redirect_carries_the_reason(client, github, monkeypatch):
+    import main
+    from auth import github_oauth
+
+    user, cookie = _signed_in_cookie(1, "alice")
+    github["identity"] = _identity_of(user)
+
+    async def refused(code, redirect_uri=None):
+        github_oauth._exchange_error.set("bad_verification_code")
+        return None
+
+    monkeypatch.setattr(main, "exchange_code", refused)
+    res = _via_callback(client, cookie)
+
+    assert _error(res).startswith("authorization_failed&reason=bad_verification_code")
+
+
+def test_a_reason_that_is_not_a_plain_code_is_dropped(client, github, monkeypatch):
+    import main
+    from auth import github_oauth
+
+    user, cookie = _signed_in_cookie(1, "alice")
+    github["identity"] = _identity_of(user)
+
+    async def refused(code, redirect_uri=None):
+        github_oauth._exchange_error.set("x&install_error=evil<script>")
+        return None
+
+    monkeypatch.setattr(main, "exchange_code", refused)
+    res = _via_callback(client, cookie)
+
+    assert res.headers["location"].endswith("/settings?install_error=authorization_failed")

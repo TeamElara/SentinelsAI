@@ -25,11 +25,16 @@ Nothing in this module ever logs a code, a token, or the client secret.
 """
 from __future__ import annotations
 
+import contextvars
+import logging
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -151,6 +156,19 @@ def authorize_url(state: str, redirect_uri: str) -> str:
     return f"{AUTHORIZE_URL}?{params}"
 
 
+# Why the last `exchange_code` in this task returned None, as a short fixed code
+# (GitHub's own `error` value such as `bad_verification_code`, or `http_500`,
+# `network_error`, `no_token`). Never a message from GitHub's body, a token or a
+# secret. It lets the install callback tell the person *why* GitHub refused,
+# instead of one sentence for every cause.
+_exchange_error: contextvars.ContextVar[str | None] = contextvars.ContextVar("github_exchange_error", default=None)
+_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def last_exchange_error() -> str | None:
+    return _exchange_error.get()
+
+
 async def exchange_code(code: str, redirect_uri: str | None = None) -> str | None:
     """Trade the callback's `code` for an access token. None on any failure.
 
@@ -161,6 +179,7 @@ async def exchange_code(code: str, redirect_uri: str | None = None) -> str | Non
     endpoint in `application/x-www-form-urlencoded`, and `response.json()`
     would raise on a body that is not actually broken.
     """
+    _exchange_error.set(None)
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             data = {
@@ -174,19 +193,31 @@ async def exchange_code(code: str, redirect_uri: str | None = None) -> str | Non
                 ACCESS_TOKEN_URL, headers={"Accept": "application/json"}, data=data
             )
         except httpx.HTTPError:
+            _exchange_error.set("network_error")
+            logger.warning("GitHub code exchange failed: network_error")
             return None
 
     if response.status_code != 200:
+        _exchange_error.set(f"http_{response.status_code}")
+        logger.warning("GitHub code exchange failed: http_%s", response.status_code)
         return None
     try:
         payload = response.json()
     except ValueError:
+        _exchange_error.set("not_json")
+        logger.warning("GitHub code exchange failed: not_json")
         return None
 
     # GitHub reports a bad or reused code as a 200 with an `error` key, not as
     # an HTTP error status — so the status check above is not enough on its own.
     token = payload.get("access_token")
-    return token if isinstance(token, str) and token else None
+    if isinstance(token, str) and token:
+        return token
+    reported = payload.get("error")
+    reason = reported if isinstance(reported, str) and _ERROR_CODE.match(reported) else "no_token"
+    _exchange_error.set(reason)
+    logger.warning("GitHub code exchange failed: %s", reason)
+    return None
 
 
 async def fetch_identity(access_token: str) -> GitHubIdentity | None:
