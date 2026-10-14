@@ -57,11 +57,16 @@ function InstallBanner() {
   const params = useSearchParams();
   const installed = params.get("installed");
   const error = params.get("install_error");
+  // GitHub's own short error code (bad_verification_code, ...), when the backend
+  // had one. Rendered as plain text, and only if it is a plain lowercase code.
+  const rawReason = params.get("reason");
+  const reason = rawReason && /^[a-z][a-z0-9_]{0,39}$/.test(rawReason) ? rawReason : null;
 
   if (error) {
     return (
       <p className="glass mt-6 border-critical/40 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.2em] text-critical">
         {INSTALL_ERRORS[error] ?? "Connecting that repository failed. Try again."}
+        {reason && <span className="mt-2 block normal-case tracking-normal text-muted">GitHub said: {reason}</span>}
       </p>
     );
   }

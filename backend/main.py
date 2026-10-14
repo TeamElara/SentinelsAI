@@ -62,6 +62,7 @@ from auth.github_oauth import (  # noqa: E402
     get_frontend_origin,
     get_webhook_secret,
     install_url,
+    last_exchange_error,
     list_user_installation_ids,
     missing_settings,
     oauth_configured,
@@ -447,8 +448,12 @@ async def auth_install_callback(
     frontend = get_frontend_origin()
     expected_state = request.cookies.get("sentinels_install_state")
 
-    def _fail(reason: str) -> RedirectResponse:
-        response = RedirectResponse(f"{frontend}/settings?install_error={reason}")
+    def _fail(reason: str, detail: str | None = None) -> RedirectResponse:
+        # `detail` is a short fixed code (GitHub's own `error` value, see
+        # github_oauth.last_exchange_error), shown on the settings page so a
+        # refusal says why. Anything that isn't a plain lowercase code is dropped.
+        suffix = f"&reason={detail}" if detail and re.fullmatch(r"[a-z][a-z0-9_]{0,39}", detail) else ""
+        response = RedirectResponse(f"{frontend}/settings?install_error={reason}{suffix}")
         response.delete_cookie("sentinels_install_state", path="/")
         return response
 
@@ -465,7 +470,7 @@ async def auth_install_callback(
         return _fail("authorization_required")
     access_token = await exchange_code(code)
     if access_token is None:
-        return _fail("authorization_failed")
+        return _fail("authorization_failed", last_exchange_error())
     identity = await fetch_identity(access_token)
     if identity is None or identity.github_id != user.github_id:
         return _fail("identity_mismatch")
