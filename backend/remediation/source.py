@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from github_api import GitHubUnavailable, check_response, public_api_headers
+
 GITHUB_API = "https://api.github.com"
 
 
@@ -37,8 +39,10 @@ async def resolve_default_ref(client: httpx.AsyncClient, owner: str, repo: str) 
     """The branch a bare GitHub URL (no `/tree/<ref>`) actually points at --
     the same lookup `repo/fetch.py`'s `fetch_repo` makes, kept separate here
     since this module never touches the tarball path."""
-    response = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}")
-    response.raise_for_status()
+    response = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=public_api_headers())
+    if response.status_code == 404:
+        raise GitHubUnavailable(f"GitHub can't find {owner}/{repo}, or it is private.", 404)
+    check_response(response, what=f"{owner}/{repo}")
     return response.json()["default_branch"]
 
 
@@ -52,10 +56,11 @@ async def get_file(
     response = await client.get(
         f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
         params={"ref": ref},
+        headers=public_api_headers(),
     )
     if response.status_code == 404:
         return None
-    response.raise_for_status()
+    check_response(response, what=f"{owner}/{repo}")
     data = response.json()
     if isinstance(data, list):
         return None  # `path` names a directory, not a file
@@ -77,10 +82,12 @@ async def resolve_ref_sha(
     stays offline-testable and only this one needs a mocked transport
     (PLAN-v5.md conflict #3: "Tag -> SHA resolution needs the network").
     """
-    response = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}/commits/{ref}")
+    response = await client.get(
+        f"{GITHUB_API}/repos/{owner}/{repo}/commits/{ref}", headers=public_api_headers()
+    )
     if response.status_code == 404:
         return None
-    response.raise_for_status()
+    check_response(response, what=f"{owner}/{repo}")
     return response.json()["sha"]
 
 
